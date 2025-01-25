@@ -1,34 +1,86 @@
-# Material 3 Demo
+# 一、概述
 
-This sample Flutter app showcases Material 3 features in the Flutter Material library. These features include updated components, typography, color system and elevation support. The app supports light and dark themes, different color palettes, as well as the ability to switch between Material 2 and Material 3. For more information about Material 3, the guidance is now live at https://m3.material.io/.
+Flutter 是由 Google 开发和提供支持的开源框架。前端和全栈开发人员使用 Flutter 为具备单一代码库的多个平台构建应用程序的用户界面（UI）。
 
-# Preview
+该 Flutter 示例应用展示了 Flutter Material 库中的 Material 3 特性。这些特性包括经过更新的组件、排版样式、颜色系统以及对阴影效果（高程）的支持。该应用支持浅色和深色主题、不同的调色板，并且具备在 Material 2 和 Material 3 之间进行切换的功能。
 
-https://user-images.githubusercontent.com/36861262/166358511-43d6a30b-33fe-4680-a4d1-808f087e740e.mp4
+**预装环境：**`Extentions: Dart, Flutter` `git` 等。
 
-# Features
-## Icon Buttons on the Top App Bar
-<img src="https://user-images.githubusercontent.com/36861262/166506048-125caeb3-5d5c-4489-9029-1cb74202dd37.png" width="25"/>  Users can switch between a light or dark theme with this button.
+## 二、快速开始
 
-<img src="https://user-images.githubusercontent.com/36861262/166508002-90fce980-d228-4312-a95f-a1919bb79ccc.png" width="25" />  Users can switch between Material 2 and Material 3 for the displayed components with this button.
+使用如下命令，快速运行此项目：
 
-<img src="https://user-images.githubusercontent.com/36861262/166511137-85dea8df-0017-4649-b913-14d4b7a17c2f.png" width="25" /> This button will bring up a pop-up menu that allows the user to change the base color used for the light and dark themes. This uses a new color seed feature to generate entire color schemes from a single color.
- 
-## Component Screen
-The default screen displays all the updated components in Material 3: AppBar, common Buttons, Floating Action Button(FAB), Card, Dialog, NavigationBar, and NavigationRail.
+```
+// 安装依赖
+flutter pub get
+// 启动应用程序
+flutter run -d web-server --web-port 9000 --web-hostname 0.0.0.0
+```
 
-### Adaptive Layout
-Based on the fact that NavigationRail is not recommended on a small screen, the app changes its layout based on the screen width. If it's played on iOS or Android devices which have a narrow screen, a Navigation Bar will show at the bottom and will be used to navigate. But if it's played as a desktop or a web app, a Navigation Rail will show on the left side and at the same time, a Navigation Bar will show as an example but will not have any functionality.
+**输出结果：**
 
-Users can see both layouts on one device by running a desktop app and adjusting the screen width.
+<img title="" src="img/output.png" alt="output.png" width="312">
 
-## Color Screen
-With Material 3, we have added support for generating a full color scheme from a single seed color. The Color Screen shows users all of the colors in light and dark color palettes that are generated from the currently selected color.
+### 三.  文件结构
 
-## Typography Screen
-The Typography Screen displays the text styles used in for the default TextTheme.
+```
+.
+├── analysis_options.yaml 
+├── android // 安卓平台相关代码和配置
+│   └── ...
+├── ios // iOS 平台相关代码和配置
+│   └── ...
+├── lib
+│   ├── color_palettes_screen.dart // 颜色面板屏幕页面代码
+│   ├── component_screen.dart // 组件屏幕页面代码
+│   ├── elevation_screen.dart // 高程屏幕页面代码
+│   ├── main.dart // 项目入口文件
+│   └── typography_screen.dart // 排版屏幕页面代码
+├── macos // macOS 平台相关代码和配置
+│   └── ...
+├── test // 测试代码目录
+│   ├── color_screen_test.dart // 颜色屏幕测试代码
+│   ├── component_screen_test.dart // 组件屏幕测试代码
+│   ├── elevation_screen_test.dart // 高程屏幕测试代码
+│   └── typography_screen_test.dart // 排版屏幕测试代码
+├── web // Web 平台相关资源和配置
+│   ├── favicon.png
+│   ├── icons // 图标资源目录
+│   ├── index.html // Web 应用入口 HTML 文件
+│   └── manifest.json // Web 应用清单文件
+└── windows // Windows 平台相关代码和配置
+│   └── ...
+├── pubspec.lock // 项目依赖锁定文件
+├── pubspec.yaml // 项目依赖和配置文件
+├── README.md // 项目说明文档
+├── img               // readme图片目录
+|   └── ...                
+```
 
-## Elevation Screen
-The Elevation screen shows different ways of elevation with a new supported feature "surfaceTintColor" in the Material library.
+### 2.  Flutter 官方文档与资源
 
+[文档 | Flutter 中文文档 - Flutter 中文开发者网站 - Flutter](https://docs.flutter.cn/?_gl=1*nfa5vr*_ga*MTUxMDc3OTk5MS4xNzM1MTE4NDMz*_ga_HPSFTRXK91*MTczNzYwNDg3OC4zLjAuMTczNzYwNDg3OC42MC4wLjA.)
 
+[Material 3](https://m3.material.io/)
+
+## 三、  常见问题
+
+[Cloud Studio（云端 IDE） 常见问题-文档中心-腾讯云](https://cloud.tencent.com/document/product/1039/33505)
+
+[Cloud Studio（云端 IDE） | Cloud Studio](https://ide.cloud.tencent.com/docs/)
+
+[Cloud Studio 轻量版 帮助文档](https://docs.qq.com/aio/DRUFZcHVvZlJuY3l2?p=1QOiTiIR9g0KMJneBDyfgM)
+
+## 帮助和支持
+
+##### 欢迎加入Cloud Studio用户反馈群
+
+当您遇到问题需要处理时，您可以直接通过到扫码进入Cloud Studio用户群进行提问.
+
+- 腾讯云工程师实时群内答疑
+
+- 扫码入群可先享受产品上新功能
+
+- 更多精彩活动群内优享
+
+<img title="" src="img/qr-code.png" alt="qr-code.png" width="270">
