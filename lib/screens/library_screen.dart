@@ -11,6 +11,7 @@ import '../theme.dart';
 import '../widgets/permission_dialog.dart';
 import 'file_browser_screen.dart';
 import 'game_detail_screen.dart';
+import 'settings_screen.dart';
 
 class LibraryScreen extends StatefulWidget {
   final String? libraryPath;
@@ -153,11 +154,6 @@ class _LibraryScreenState extends State<LibraryScreen>
         title: const Text('游戏库'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.bug_report_outlined),
-            tooltip: '诊断游戏库扫描结果',
-            onPressed: _showDiagnostics,
-          ),
-          IconButton(
             icon: const Icon(Icons.refresh_rounded),
             tooltip: '刷新（识别外部修改）',
             onPressed: _checkExternalChanges,
@@ -166,6 +162,11 @@ class _LibraryScreenState extends State<LibraryScreen>
             icon: const Icon(Icons.add_outlined),
             tooltip: '新建平台',
             onPressed: _platforms.isEmpty ? null : _createPlatform,
+          ),
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: '设置',
+            onPressed: _openSettings,
           ),
         ],
       ),
@@ -190,75 +191,13 @@ class _LibraryScreenState extends State<LibraryScreen>
     );
   }
 
-  Future<void> _showDiagnostics() async {
-    final path = _boundPath ?? await PreferencesService.libraryPath;
-    if (path == null || path.isEmpty) {
-      _showMessage('尚未绑定游戏库');
-      return;
-    }
-    showDialog<void>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: AppTheme.surface,
-        title: const Text('扫描诊断',
-            style: TextStyle(color: AppTheme.textPrimary, fontSize: 17)),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: SingleChildScrollView(
-            child: FutureBuilder<String>(
-              future: _buildDiagnosticText(path),
-              builder: (context, snapshot) {
-                final text = snapshot.data ?? '正在扫描…';
-                return SelectableText(text,
-                    style: const TextStyle(
-                        color: AppTheme.textSecondary, fontSize: 12, height: 1.6));
-              },
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context), child: const Text('关闭')),
-        ],
+  Future<void> _openSettings() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => SettingsScreen(onLibraryChanged: (_) {}),
       ),
     );
-  }
-
-  Future<String> _buildDiagnosticText(String path) async {
-    final buffer = StringBuffer();
-    buffer.writeln('游戏库目录：$path');
-    buffer.writeln('目录存在：${await Directory(path).exists()}');
-    buffer.writeln('识别到平台：${_platforms.length} 个');
-    buffer.writeln('');
-    try {
-      final dirs = (await Directory(path).list().toList())
-          .whereType<Directory>()
-          .toList();
-      buffer.writeln('根目录下的子目录（${dirs.length} 个）：');
-      for (final dir in dirs) {
-        final name = p.basename(dir.path);
-        final tomlExists = await File(p.join(dir.path, 'savedeck.toml')).exists();
-        final info = await LibraryService.inspectPlatform(dir.path);
-        buffer.writeln(
-          '  · $name | toml=${tomlExists ? "有" : "无"} | 文件${info["total"]} | '
-          'ROM扩展名:${(info["romExtensions"] as List).join("/")} | '
-          '忽略:${(info["ignoredExtensions"] as List).join("/")}',
-        );
-      }
-    } catch (e) {
-      buffer.writeln('读取目录失败：$e');
-    }
-    buffer.writeln('');
-    for (final platform in _platforms) {
-      buffer.writeln(
-        '平台 ${platform.platform}: toml=${platform.hasToml} 游戏=${platform.games.length} '
-        '目录=${platform.directory}',
-      );
-      if (platform.loadError != null) {
-        buffer.writeln('  加载错误：${platform.loadError}');
-      }
-    }
-    return buffer.toString();
+    if (mounted) await _load();
   }
 
   void _showMessage(String message) {
@@ -432,7 +371,13 @@ class _LibraryScreenState extends State<LibraryScreen>
                 style: const TextStyle(
                     color: AppTheme.textPrimary, fontSize: 18, fontWeight: FontWeight.w600),
               ),
-              const SizedBox(width: 8),
+              IconButton(
+                icon: const Icon(Icons.edit_outlined, size: 18),
+                tooltip: '修改平台名称与排序',
+                visualDensity: VisualDensity.compact,
+                onPressed: () => _editPlatform(platform),
+              ),
+              const SizedBox(width: 4),
               Flexible(
                 child: Text(
                   platform.loadError != null
@@ -506,9 +451,13 @@ class _LibraryScreenState extends State<LibraryScreen>
                   ),
                 )
               : GridView.builder(
-                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 100),
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 2,
+                  padding: const EdgeInsets.fromLTRB(
+                      16, 4, 16, AppTheme.bottomNavClearance + 100),
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount:
+                        MediaQuery.of(context).orientation == Orientation.landscape
+                            ? 4
+                            : 2,
                     crossAxisSpacing: 12,
                     mainAxisSpacing: 12,
                     childAspectRatio: 0.78,
@@ -646,6 +595,71 @@ class _LibraryScreenState extends State<LibraryScreen>
     await LibraryService.createPlatform(root, name);
     widget.onReload();
     await _load();
+  }
+
+  /// 修改当前平台的名称与排序，写回 savedeck.toml。
+  Future<void> _editPlatform(PlatformLibrary platform) async {
+    final nameController = TextEditingController(text: platform.platform);
+    final sortController = TextEditingController(text: platform.sort ?? '');
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppTheme.surface,
+        title: const Text('修改平台',
+            style: TextStyle(color: AppTheme.textPrimary, fontSize: 17)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: nameController,
+              autofocus: true,
+              style: const TextStyle(color: AppTheme.textPrimary),
+              decoration: const InputDecoration(
+                labelText: '平台名称',
+                hintText: '例如：GBA、PS2',
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: sortController,
+              style: const TextStyle(color: AppTheme.textPrimary),
+              decoration: const InputDecoration(
+                labelText: '排序',
+                hintText: '例如：001，留空则不设置',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    if (saved != true) return;
+
+    final name = nameController.text.trim();
+    if (name.isEmpty) {
+      _showMessage('平台名称不能为空');
+      return;
+    }
+    platform.platform = name;
+    final sort = sortController.text.trim();
+    platform.sort = sort.isEmpty ? null : sort;
+    platform.hasToml = true;
+    try {
+      await TomlService.save(platform);
+      await _load();
+      if (mounted) _showMessage('平台信息已保存');
+    } catch (e) {
+      if (mounted) _showMessage('保存失败：$e');
+    }
   }
 
   Future<void> _addRom() async {

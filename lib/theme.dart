@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
@@ -87,41 +88,99 @@ class AppTheme {
         ),
       );
 
-  /// 带柔和光斑的浅灰渐变背景，作为毛玻璃的衬底。
-  static Widget backdrop({required Widget child}) {
-    return Stack(
-      children: [
-        const Positioned.fill(
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: <Color>[Color(0xFFFAFBFC), Color(0xFFEDEFF3), Color(0xFFF7F8FA)],
-              ),
-            ),
-          ),
-        ),
-        Positioned(
-          top: -130,
-          left: -90,
-          child: _blob(320, Colors.white.withOpacity(0.85)),
-        ),
-        Positioned(
-          bottom: -170,
-          right: -70,
-          child: _blob(360, Colors.black.withOpacity(0.025)),
-        ),
-        Positioned.fill(child: child),
-      ],
-    );
-  }
+  /// 带缓慢浮动光斑的浅灰渐变背景，作为毛玻璃的衬底。
+  static Widget backdrop({required Widget child}) => GlassBackdrop(child: child);
+
+  /// 页面内容需要避开底部导航栏时的额外间距。
+  static const double bottomNavClearance = 92;
 
   static Widget _blob(double size, Color color) => Container(
         width: size,
         height: size,
         decoration: BoxDecoration(shape: BoxShape.circle, color: color),
       );
+}
+
+/// 动态毛玻璃背景：光斑与渐变方向缓慢流动，为所有页面提供统一衬底。
+class GlassBackdrop extends StatefulWidget {
+  final Widget child;
+
+  const GlassBackdrop({super.key, required this.child});
+
+  @override
+  State<GlassBackdrop> createState() => _GlassBackdropState();
+}
+
+class _GlassBackdropState extends State<GlassBackdrop>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 18),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      child: widget.child,
+      builder: (context, child) {
+        final angle = _controller.value * math.pi * 2;
+        final dx = math.sin(angle) * 22;
+        final dy = math.cos(angle * 0.8) * 18;
+        final dx2 = math.cos(angle * 0.6) * 26;
+        final dy2 = math.sin(angle * 0.7) * 20;
+
+        return Stack(
+          children: <Widget>[
+            Positioned.fill(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment(-1 + dx / 320, -1 + dy / 320),
+                    end: Alignment(1 + dx2 / 320, 1 + dy2 / 320),
+                    colors: const <Color>[
+                      Color(0xFFFAFBFC),
+                      Color(0xFFEDEFF3),
+                      Color(0xFFF7F8FA),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              top: -130 + dy,
+              left: -90 + dx,
+              child: AppTheme._blob(320, Colors.white.withOpacity(0.85)),
+            ),
+            Positioned(
+              top: 100 + dy2,
+              right: -120 + dx2,
+              child: AppTheme._blob(280,
+                  const Color(0xFFE6ECF5).withOpacity(0.55)),
+            ),
+            Positioned(
+              bottom: -170 + dy2,
+              right: -70 + dx2,
+              child: AppTheme._blob(360, Colors.black.withOpacity(0.025)),
+            ),
+            Positioned.fill(child: child ?? const SizedBox.shrink()),
+          ],
+        );
+      },
+    );
+  }
 }
 
 /// 可点击的毛玻璃卡片。
@@ -278,9 +337,12 @@ class GlassChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(30),
+        child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         decoration: BoxDecoration(
@@ -304,8 +366,9 @@ class GlassChip extends StatelessWidget {
                 fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
                 color: selected ? Colors.white : AppTheme.textSecondary,
               ),
-            ),
-          ],
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -336,6 +399,96 @@ class SectionTitle extends StatelessWidget {
         const Spacer(),
         if (trailing != null) trailing!,
       ],
+    );
+  }
+}
+
+/// 可折叠的毛玻璃设置卡片，标题栏始终可见，内容区带展开动画。
+class GlassExpansionCard extends StatefulWidget {
+  final String title;
+  final IconData? icon;
+  final bool initiallyExpanded;
+  final List<Widget> children;
+  final EdgeInsetsGeometry contentPadding;
+
+  const GlassExpansionCard({
+    super.key,
+    required this.title,
+    required this.children,
+    this.icon,
+    this.initiallyExpanded = false,
+    this.contentPadding = const EdgeInsets.fromLTRB(16, 0, 16, 16),
+  });
+
+  @override
+  State<GlassExpansionCard> createState() => _GlassExpansionCardState();
+}
+
+class _GlassExpansionCardState extends State<GlassExpansionCard> {
+  late bool _expanded;
+
+  @override
+  void initState() {
+    super.initState();
+    _expanded = widget.initiallyExpanded;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassCard(
+      padding: EdgeInsets.zero,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          InkWell(
+            borderRadius: BorderRadius.vertical(
+              top: const Radius.circular(18),
+              bottom: _expanded ? Radius.zero : const Radius.circular(18),
+            ),
+            onTap: () => setState(() => _expanded = !_expanded),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                children: <Widget>[
+                  if (widget.icon != null) ...<Widget>[
+                    Icon(widget.icon, size: 17, color: AppTheme.accent),
+                    const SizedBox(width: 8),
+                  ],
+                  Expanded(
+                    child: Text(
+                      widget.title,
+                      style: const TextStyle(
+                        color: AppTheme.textPrimary,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  Icon(
+                    _expanded ? Icons.expand_less : Icons.expand_more,
+                    size: 20,
+                    color: AppTheme.textSecondary,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          AnimatedCrossFade(
+            duration: const Duration(milliseconds: 220),
+            sizeCurve: Curves.easeOutCubic,
+            crossFadeState:
+                _expanded ? CrossFadeState.showSecond : CrossFadeState.showFirst,
+            firstChild: const SizedBox(width: double.infinity, height: 0),
+            secondChild: Padding(
+              padding: widget.contentPadding,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: widget.children,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

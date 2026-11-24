@@ -13,7 +13,6 @@ import 'toml_service.dart';
 class ScreenscraperConfig {
   static const String devId = '';
   static const String devPassword = '';
-  static const String softName = 'RetrEnging';
 
   /// 搜刮默认语言（简介等文本优先 en）。
   static const String defaultLanguage = 'en';
@@ -31,7 +30,6 @@ class ScreenscraperService {
   final String preferredLanguage;
   final String devIdOverride;
   final String devPasswordOverride;
-  final String softNameOverride;
 
   ScreenscraperService({
     String? username,
@@ -39,7 +37,6 @@ class ScreenscraperService {
     this.preferredLanguage = ScreenscraperConfig.defaultLanguage,
     String? devId,
     String? devPassword,
-    String? softname,
   })  : username = username ?? '',
         password = password ?? '',
         devIdOverride = (devId == null || devId.isEmpty)
@@ -47,10 +44,7 @@ class ScreenscraperService {
             : devId,
         devPasswordOverride = (devPassword == null || devPassword.isEmpty)
             ? ScreenscraperConfig.devPassword
-            : devPassword,
-        softNameOverride = (softname == null || softname.isEmpty)
-            ? ScreenscraperConfig.softName
-            : softname;
+            : devPassword;
 
   bool get hasUserAccount => username.isNotEmpty && password.isNotEmpty;
 
@@ -59,10 +53,10 @@ class ScreenscraperService {
 
   /// 认证参数：开发者凭据始终携带；用户账号仅在已配置时附带，
   /// 匿名访问时携带空 ssid/sspassword 会被服务端判为无效用户。
+  /// 已实测 softname 为可选参数，这里不发送。
   Map<String, String> get _auth => <String, String>{
         'devid': devIdOverride,
         'devpassword': devPasswordOverride,
-        'softname': softNameOverride,
         'output': 'json',
         if (hasUserAccount) 'ssid': username,
         if (hasUserAccount) 'sspassword': password,
@@ -89,9 +83,8 @@ class ScreenscraperService {
         final response = await http
             .get(
               uri,
-              headers: <String, String>{
-                // UA 与 softname 保持一致，便于 ScreenScraper 统计与校验。
-                'User-Agent': '$softNameOverride/1.0 (android)',
+              headers: const <String, String>{
+                'User-Agent': 'SaveDeckToolkit/1.0 (android)',
                 'Accept': 'application/json',
               },
             )
@@ -342,6 +335,7 @@ class ScreenscraperService {
     bool downloadVideo = true,
     bool overwriteDescription = true,
     void Function(String message)? onProgress,
+    void Function(int received, int? total)? onDownloadProgress,
   }) async {
     var detail = candidate;
     if (candidate.coverUrl == null &&
@@ -385,7 +379,11 @@ class ScreenscraperService {
       onProgress?.call('正在下载封面…');
       final ext = _mediaExtension(detail.coverFormat, 'png');
       final file = File(p.join(mediaDir.path, 'cover.$ext'));
-      await LibraryService.downloadStream(detail.coverUrl!, file.path);
+      await LibraryService.downloadStream(
+        detail.coverUrl!,
+        file.path,
+        onProgress: onDownloadProgress,
+      );
       cover = LibraryService.mediaRelativePath(newName, p.basename(file.path));
       for (final oldExt in const <String>['png', 'jpg', 'webp']) {
         if (oldExt == ext) continue;
@@ -399,7 +397,11 @@ class ScreenscraperService {
       final ext = _mediaExtension(detail.videoFormat, 'mp4');
       final file = File(p.join(mediaDir.path, 'video.$ext'));
       try {
-        await LibraryService.downloadStream(detail.videoUrl!, file.path);
+        await LibraryService.downloadStream(
+          detail.videoUrl!,
+          file.path,
+          onProgress: onDownloadProgress,
+        );
         video = LibraryService.mediaRelativePath(newName, p.basename(file.path));
         for (final oldExt in const <String>['mp4', 'webm', 'avi']) {
           if (oldExt == ext) continue;
@@ -441,6 +443,7 @@ class ScreenscraperService {
     bool downloadVideo = true,
     bool overwriteDescription = true,
     void Function(String message)? onProgress,
+    void Function(int received, int? total)? onDownloadProgress,
   }) async {
     final systemId = PlatformCatalog.ssIdFor(platform.platform);
     final romPath = p.join(platform.directory, game.file);
@@ -462,6 +465,7 @@ class ScreenscraperService {
       downloadVideo: downloadVideo,
       overwriteDescription: overwriteDescription,
       onProgress: onProgress,
+      onDownloadProgress: onDownloadProgress,
     );
   }
 
@@ -484,8 +488,8 @@ class ScreenscraperService {
         _mapValue(jeu['name'], 'text') ??
         fallbackName;
     final medias = (jeu['medias'] as List?) ?? const <dynamic>[];
-    final cover = _pickMedia(medias, const <String>['box-2D', 'box2d', 'box-3D'], preferred: true);
-    final video = _pickMedia(medias, const <String>['video-normalized', 'video']);
+    final cover = pickMedia(medias, const <String>['box-2D', 'box-3D']);
+    final video = pickMedia(medias, const <String>['video-normalized', 'video']);
 
     return ScrapeCandidate(
       gameId: jeu['id']?.toString() ?? '',
@@ -502,13 +506,14 @@ class ScreenscraperService {
 
   /// 从媒体列表中选择最合适的项。
   ///
-  /// 先按 [types] 的顺序匹配媒体类型（如 box-2D 优先于 box-3D），
-  /// 同类型内再按区域优先级（wor > us > eu > jp ...）挑选。
-  static Map<String, dynamic>? _pickMedia(
+  /// 只做媒体类型的**精确**匹配（归一化大小写与 `-`/`_`/空格）。
+  /// ScreenScraper 同时提供 `box-2D`（正面）、`box-2D-back`（背面）和
+  /// `box-2D-side`（书脊/侧边），若用模糊匹配会把侧边图误当作正面封面。
+  /// 非正面类型（side/spine/back）一律排除；同类型内按区域优先级挑选。
+  static Map<String, dynamic>? pickMedia(
     List medias,
-    List<String> types, {
-    bool preferred = false,
-  }) {
+    List<String> types,
+  ) {
     // 借鉴 neostation-frontend 的区域优先级表。
     const regionOrder = <String>[
       'wor', 'us', 'eu', 'jp', 'sp', 'fr', 'de', 'it', 'kr', 'cn', 'zh', 'ko',
@@ -516,6 +521,7 @@ class ScreenscraperService {
     final all = medias
         .whereType<Map>()
         .map((m) => Map<String, dynamic>.from(m))
+        .where((m) => (m['url']?.toString() ?? '').isNotEmpty)
         .toList();
     if (all.isEmpty) return null;
 
@@ -526,15 +532,26 @@ class ScreenscraperService {
     }
 
     for (final type in types) {
-      final matched = all
-          .where((m) => (m['type']?.toString().toLowerCase() ?? '')
-              .contains(type.toLowerCase()))
-          .toList();
+      final normalizedType = _normalizeMediaType(type);
+      final matched = all.where((m) {
+        final raw = m['type']?.toString() ?? '';
+        if (_isNonFrontCoverType(raw)) return false;
+        return _normalizeMediaType(raw) == normalizedType;
+      }).toList();
       if (matched.isEmpty) continue;
       matched.sort((a, b) => regionRank(a).compareTo(regionRank(b)));
       return matched.first;
     }
     return null;
+  }
+
+  static String _normalizeMediaType(String value) =>
+      value.toLowerCase().replaceAll(RegExp(r'[-_\s]'), '');
+
+  /// 背面、侧边（书脊）不是游戏正面封面，必须排除。
+  static bool _isNonFrontCoverType(String rawType) {
+    final type = _normalizeMediaType(rawType);
+    return type.contains('side') || type.contains('spine') || type.contains('back');
   }
 
   /// 从多语言名称数组中挑选显示名。

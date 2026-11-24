@@ -1,14 +1,25 @@
-import 'dart:ui' show ImageFilter;
-
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show LogicalKeyboardKey;
 
 import 'data/screenscraper_systems.dart';
-import 'screens/batch_scrape_screen.dart';
 import 'screens/library_screen.dart';
-import 'screens/settings_screen.dart';
+import 'services/background_scrape_service.dart';
 import 'services/library_service.dart';
 import 'services/preferences_service.dart';
 import 'theme.dart';
+
+class _MoveFocusIntent extends Intent {
+  const _MoveFocusIntent(this.direction);
+  final TraversalDirection direction;
+}
+
+class _MoveFocusAction extends Action<_MoveFocusIntent> {
+  @override
+  Object? invoke(_MoveFocusIntent intent) {
+    FocusManager.instance.primaryFocus?.focusInDirection(intent.direction);
+    return null;
+  }
+}
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -26,7 +37,6 @@ class SaveDeckToolkitApp extends StatefulWidget {
 
 class _SaveDeckToolkitAppState extends State<SaveDeckToolkitApp>
     with WidgetsBindingObserver {
-  int _index = 0;
   int _revision = 0;
   String? _libraryPath;
   bool _checkingPermission = true;
@@ -36,13 +46,19 @@ class _SaveDeckToolkitAppState extends State<SaveDeckToolkitApp>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    BackgroundScrapeService.instance.addListener(_onBackgroundChanged);
     _initialize();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    BackgroundScrapeService.instance.removeListener(_onBackgroundChanged);
     super.dispose();
+  }
+
+  void _onBackgroundChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
@@ -97,7 +113,6 @@ class _SaveDeckToolkitAppState extends State<SaveDeckToolkitApp>
     setState(() {
       _libraryPath = path;
       _revision++;
-      _index = 0;
     });
     // 目录刚变更，立即重检一次，保证未授权时能及时显示提示条。
     _recheckPermission();
@@ -111,8 +126,24 @@ class _SaveDeckToolkitAppState extends State<SaveDeckToolkitApp>
       debugShowCheckedModeBanner: false,
       title: 'RetroEngine',
       theme: AppTheme.theme,
-      home: Scaffold(
-        extendBody: true,
+      home: Shortcuts(
+        shortcuts: const <ShortcutActivator, Intent>{
+          SingleActivator(LogicalKeyboardKey.arrowUp):
+              _MoveFocusIntent(TraversalDirection.up),
+          SingleActivator(LogicalKeyboardKey.arrowDown):
+              _MoveFocusIntent(TraversalDirection.down),
+          SingleActivator(LogicalKeyboardKey.arrowLeft):
+              _MoveFocusIntent(TraversalDirection.left),
+          SingleActivator(LogicalKeyboardKey.arrowRight):
+              _MoveFocusIntent(TraversalDirection.right),
+        },
+        child: Actions(
+          actions: <Type, Action<Intent>>{
+            _MoveFocusIntent: _MoveFocusAction(),
+          },
+          child: FocusTraversalGroup(
+            child: Scaffold(
+              extendBody: true,
         backgroundColor: AppTheme.background,
         body: AppTheme.backdrop(
           child: _checkingPermission
@@ -148,79 +179,181 @@ class _SaveDeckToolkitAppState extends State<SaveDeckToolkitApp>
                           ],
                         ),
                       ),
+                    _buildBackgroundProgress(),
                     Expanded(
-                      child: IndexedStack(
-                        index: _index,
-                        children: [
-                          LibraryScreen(
-                            key: ValueKey('library-$_revision'),
-                            libraryPath: _libraryPath,
-                            onReload: _bump,
-                            onLibraryChanged: _onLibraryChanged,
-                          ),
-                          BatchScrapeScreen(
-                            key: ValueKey('batch-$_revision'),
-                            libraryPath: _libraryPath,
-                          ),
-                          SettingsScreen(
-                            key: ValueKey('settings-$_revision'),
-                            onLibraryChanged: _onLibraryChanged,
-                          ),
-                        ],
+                      child: LibraryScreen(
+                        key: ValueKey('library-$_revision'),
+                        libraryPath: _libraryPath,
+                        onReload: _bump,
+                        onLibraryChanged: _onLibraryChanged,
                       ),
                     ),
                   ],
                 ),
         ),
-        bottomNavigationBar: _buildBottomBar(),
-      ),
-    );
-  }
-
-  Widget _buildBottomBar() {
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.88),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppTheme.border),
-        boxShadow: <BoxShadow>[
-          BoxShadow(
-            color: Colors.black.withOpacity(0.06),
-            blurRadius: 18,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(20),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-          child: NavigationBar(
-            backgroundColor: Colors.transparent,
-            elevation: 0,
-            selectedIndex: _index,
-            onDestinationSelected: (index) => setState(() => _index = index),
-            destinations: const <NavigationDestination>[
-              NavigationDestination(
-                icon: Icon(Icons.sports_esports_outlined),
-                selectedIcon: Icon(Icons.sports_esports),
-                label: '游戏库',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.auto_awesome_outlined),
-                selectedIcon: Icon(Icons.auto_awesome),
-                label: '批量搜刮',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.settings_outlined),
-                selectedIcon: Icon(Icons.settings),
-                label: '设置',
-              ),
-            ],
+            ),
           ),
         ),
       ),
     );
   }
+
+  Widget _buildBackgroundProgress() {
+    final status = BackgroundScrapeService.instance.status;
+    if (!status.running && status.total == 0) return const SizedBox.shrink();
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: GlassCard(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        radius: 12,
+        onTap: _showScrapeProgressDialog,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  status.running ? Icons.download : Icons.check_circle_outline,
+                  size: 16,
+                  color: AppTheme.accent,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    status.running
+                        ? '后台搜刮 ${status.completed}/${status.total} · ${status.currentName}'
+                        : '上次后台搜刮：成功 ${status.success}，失败 ${status.failed}',
+                    style: const TextStyle(
+                        color: AppTheme.textPrimary, fontSize: 12),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const Icon(Icons.chevron_right,
+                    size: 16, color: AppTheme.textSecondary),
+              ],
+            ),
+            if (status.running) ...[
+              const SizedBox(height: 8),
+              LinearProgressIndicator(
+                value: status.progress,
+                minHeight: 3,
+                backgroundColor: AppTheme.border,
+                valueColor:
+                    const AlwaysStoppedAnimation<Color>(AppTheme.accent),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showScrapeProgressDialog() {
+    final service = BackgroundScrapeService.instance;
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppTheme.surface,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (dialogContext) => AnimatedBuilder(
+        animation: service,
+        builder: (context, _) {
+          final status = service.status;
+          final entries = status.statuses.entries.toList();
+          return SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                  child: Row(
+                    children: [
+                      const Expanded(
+                        child: Text('后台搜刮进度',
+                            style: TextStyle(
+                                color: AppTheme.textPrimary,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600)),
+                      ),
+                      if (!status.running)
+                        TextButton(
+                          onPressed: () {
+                            service.clear();
+                            Navigator.pop(dialogContext);
+                          },
+                          child: const Text('清除记录'),
+                        ),
+                    ],
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: LinearProgressIndicator(
+                    value: status.progress,
+                    minHeight: 4,
+                    backgroundColor: AppTheme.border,
+                    valueColor:
+                        const AlwaysStoppedAnimation<Color>(AppTheme.accent),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                  child: Text(
+                    status.message.isEmpty
+                        ? '等待任务…'
+                        : '${status.message}（${status.completed}/${status.total}）',
+                    style: const TextStyle(
+                        color: AppTheme.textSecondary, fontSize: 12),
+                  ),
+                ),
+                Flexible(
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                    itemCount: entries.length,
+                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemBuilder: (context, index) {
+                      final entry = entries[index];
+                      final failed = entry.value.startsWith('失败');
+                      final itemProgress = status.progresses[entry.key] ?? 0;
+                      return ListTile(
+                        dense: true,
+                        title: Text(
+                          entry.key.split('/').last,
+                          style: const TextStyle(
+                              color: AppTheme.textPrimary, fontSize: 13),
+                        ),
+                        subtitle: itemProgress > 0 && itemProgress < 1
+                            ? LinearProgressIndicator(
+                                value: itemProgress,
+                                minHeight: 2,
+                                backgroundColor: AppTheme.border,
+                                valueColor:
+                                    const AlwaysStoppedAnimation<Color>(
+                                        AppTheme.accent),
+                              )
+                            : null,
+                        trailing: Text(
+                          itemProgress > 0 && itemProgress < 1
+                              ? '${(itemProgress * 100).toInt()}%'
+                              : entry.value,
+                          style: TextStyle(
+                              color: failed ? AppTheme.danger : AppTheme.success,
+                              fontSize: 11),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
 }

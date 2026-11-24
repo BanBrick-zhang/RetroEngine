@@ -389,6 +389,10 @@ class LibraryService {
 
   /// 将 ROM 复制到平台目录，返回相对路径（ savedeck.toml 的 file 字段值）。
   static Future<String> copyRomToPlatform(String sourcePath, PlatformLibrary platform) async {
+    // 源文件已在目标平台目录（含子目录）内时直接引用，不重复复制。
+    if (p.isWithin(platform.directory, sourcePath)) {
+      return p.relative(sourcePath, from: platform.directory).replaceAll('\\', '/');
+    }
     final fileName = p.basename(sourcePath);
     final dest = File(p.join(platform.directory, fileName));
     if (p.equals(sourcePath, dest.path)) return fileName;
@@ -405,6 +409,40 @@ class LibraryService {
     return p.basename(target.path);
   }
 
+  /// 把 ROM 重命名为游戏名，保留原扩展名与所在子目录，返回新的相对路径。
+  /// 目标文件已存在时自动追加序号，避免覆盖其他 ROM。
+  static Future<String> renameRomFile(
+    PlatformLibrary platform,
+    GameEntry game,
+    String newName,
+  ) async {
+    final relative = game.file.replaceAll('\\', '/');
+    final source = File(p.join(platform.directory, relative));
+    if (!await source.exists()) return relative;
+
+    final base = _safeName(newName);
+    if (base.isEmpty) return relative;
+    final extension = p.extension(relative);
+    final parent = p.dirname(relative);
+    final directory = parent == '.' ? '' : parent;
+
+    String targetRelative(String name) =>
+        p.join(directory, '$name$extension').replaceAll('\\', '/');
+
+    var candidate = targetRelative(base);
+    var target = File(p.join(platform.directory, candidate));
+    var counter = 1;
+    while (await target.exists() && !p.equals(source.path, target.path)) {
+      candidate = targetRelative('$base ($counter)');
+      target = File(p.join(platform.directory, candidate));
+      counter++;
+    }
+    if (p.equals(source.path, target.path)) return relative;
+
+    await source.rename(target.path);
+    return candidate;
+  }
+
   /// 为游戏创建媒体目录并返回其绝对路径。
   static Future<Directory> mediaDirectory(PlatformLibrary platform, String gameName) async {
     final dir = Directory(p.join(platform.directory, 'media', _safeName(gameName)));
@@ -416,6 +454,43 @@ class LibraryService {
   static String mediaRelativePath(String gameName, String fileName) =>
       p.join('media', _safeName(gameName), fileName).replaceAll('\\', '/');
 
+  /// 把媒体目录重命名为新游戏名，并同步修正 cover/video 相对路径。
+  /// 目标目录已存在时合并文件后删除旧目录，不覆盖已有文件。
+  static Future<GameEntry> renameMediaDirectory(
+    PlatformLibrary platform,
+    GameEntry game,
+    String oldName,
+    String newName,
+  ) async {
+    final oldSafe = _safeName(oldName);
+    final newSafe = _safeName(newName);
+    if (oldSafe == newSafe) return game;
+    final oldDir = Directory(p.join(platform.directory, 'media', oldSafe));
+    if (!await oldDir.exists()) return game;
+    final newDir = Directory(p.join(platform.directory, 'media', newSafe));
+
+    if (await newDir.exists()) {
+      for (final entity in await oldDir.list().toList()) {
+        if (entity is File) {
+          final target = File(p.join(newDir.path, p.basename(entity.path)));
+          if (!await target.exists()) await entity.copy(target.path);
+        }
+      }
+      await oldDir.delete(recursive: true);
+    } else {
+      await oldDir.rename(newDir.path);
+    }
+
+    String? fix(String? value) =>
+        value?.replaceFirst('media/$oldSafe/', 'media/$newSafe/');
+    return game.copyWith(
+      cover: fix(game.cover),
+      video: fix(game.video),
+      clearCover: game.cover == null,
+      clearVideo: game.video == null,
+    );
+  }
+
   static String _safeName(String name) {
     return name.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
   }
@@ -424,6 +499,30 @@ class LibraryService {
   static Future<void> removeMedia(PlatformLibrary platform, String gameName) async {
     final dir = Directory(p.join(platform.directory, 'media', _safeName(gameName)));
     if (await dir.exists()) await dir.delete(recursive: true);
+  }
+
+  /// 按类型删除媒体文件；目录内没有剩余文件时一并删除目录。
+  static Future<void> deleteMediaFiles(
+    PlatformLibrary platform,
+    String gameName, {
+    bool cover = false,
+    bool video = false,
+  }) async {
+    final dir = Directory(p.join(platform.directory, 'media', _safeName(gameName)));
+    if (!await dir.exists()) return;
+    if (cover) {
+      for (final ext in const <String>['png', 'jpg', 'jpeg', 'webp']) {
+        final file = File(p.join(dir.path, 'cover.$ext'));
+        if (await file.exists()) await file.delete();
+      }
+    }
+    if (video) {
+      for (final ext in const <String>['mp4', 'webm', 'avi']) {
+        final file = File(p.join(dir.path, 'video.$ext'));
+        if (await file.exists()) await file.delete();
+      }
+    }
+    if ((await dir.list().toList()).isEmpty) await dir.delete();
   }
 
   /// 下载远程文件到本地。

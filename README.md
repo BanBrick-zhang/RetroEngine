@@ -2,7 +2,7 @@
 
 基于 Flutter 的 **SaveDeck 游戏库管理 + ScreenScraper 自动搜刮工具**，仅面向 Android。
 
-[GitHub 仓库](https://github.com/BanBrick-zhang/RetroEngine) · [问题反馈](https://github.com/BanBrick-zhang/RetroEngine/issues) · 当前版本：`0.0.1`
+[GitHub 仓库](https://github.com/BanBrick-zhang/RetroEngine) · [问题反馈](https://github.com/BanBrick-zhang/RetroEngine/issues) · 当前版本：`0.0.3`
 
 RetroEngine（pubspec 包名 `savedeck_toolkit`）直接读写设备共享存储中的游戏库目录，识别各平台 ROM 与 `savedeck.toml`，并从 ScreenScraper.fr 拉取封面（box-2D）、视频与简介，写回配置与 `media/` 目录。
 
@@ -10,11 +10,16 @@ RetroEngine（pubspec 包名 `savedeck_toolkit`）直接读写设备共享存储
 
 - **游戏库**：绑定游戏库总目录后自动扫描各平台子目录，识别 ROM；无 `savedeck.toml`
   时按扩展名自动生成条目，搜刮或保存时自动创建配置文件。
-- **单条搜刮**：优先用 CRC32/MD5/SHA1 精确匹配，失败回落名称搜索；支持候选选择、
-  手动按名称搜索、封面/视频/简介写入。
-- **批量搜刮**：勾选多个游戏，可选是否下载封面与视频，逐条展示处理状态。
-- **编辑游戏**：名称、ROM 路径、排序、封面、视频、启动指令、UUID、简介均可编辑。
-- **设置**：游戏库目录、ScreenScraper 账号与开发者凭据、首选语言、下载开关。
+- **手动搜刮**：按名称搜索并选择候选，可单独勾选封面、视频、简介；任务提交后在后台
+  下载，编辑界面可查看进度条，不阻塞其他操作。
+- **编辑游戏**：名称、ROM 路径、排序、封面、视频、启动指令、UUID、简介均可编辑；
+  可单独删除封面图片、视频或简介；保存时可开启按游戏名同步重命名 ROM（保留扩展名）
+  与 media 媒体目录。
+- **设置**：游戏库目录、ScreenScraper 账号与开发者凭据、首选语言、下载开关、
+  视频延时自动播放、ROM 与媒体目录重命名开关；所有菜单默认折叠，入口在顶部右侧。
+- **添加 ROM**：源文件若已在目标平台目录内则直接引用，不再重复复制。
+- **操作适配**：无底部导航栏，默认进入游戏库；横屏网格自动调整为四列，
+  支持手柄/键盘方向键焦点导航。
 - **权限引导**：绑定目录后检测真实读写权限，可直达系统「所有文件访问权限」页面；
   授权返回应用后自动重新读取，无需重新选择目录。
 
@@ -77,7 +82,7 @@ flutter test
 ├── assets
 │   └── screenscraper_systems.json    平台 systemeid 映射表
 ├── lib
-│   ├── main.dart                     入口：游戏库 / 批量搜刮 / 设置 三个 Tab
+│   ├── main.dart                     入口：游戏库单页 + 顶部设置入口，全局后台进度面板
 │   ├── theme.dart                    灰白毛玻璃设计系统
 │   ├── models/library.dart           数据模型与平台目录表
 │   ├── data
@@ -87,8 +92,10 @@ flutter test
 │   │   ├── toml_service.dart         savedeck.toml 解析与序列化
 │   │   ├── library_service.dart      文件系统、权限、ROM 扫描、哈希、下载
 │   │   ├── screenscraper_service.dart  ScreenScraper API v2 客户端
-│   │   └── preferences_service.dart   设置持久化
-│   ├── screens                       游戏库 / 详情 / 批量搜刮 / 设置 / 文件浏览器
+│   │   ├── preferences_service.dart   设置持久化
+│   │   ├── background_scrape_service.dart  后台搜刮队列与进度
+│   │   └── version_service.dart       读取 pubspec 版本号
+│   ├── screens                       游戏库 / 详情 / 设置 / 文件浏览器
 │   └── widgets/permission_dialog.dart  权限引导
 ├── test                              单元测试（toml / library / screenscraper / systems）
 ├── tool/fetch_screenscraper_systems.dart  平台映射表生成脚本
@@ -133,7 +140,7 @@ video = "media/示例游戏/video.mp4"
 ## 五、ScreenScraper 搜刮
 
 开发者凭据已内置在 `lib/services/screenscraper_service.dart` 的
-`ScreenscraperConfig`（`devid` / `devpassword` / `softname`），无需在应用内填写。
+`ScreenscraperConfig`（`devid` / `devpassword`），无需在应用内填写。
 设置页只需**可选**填写 ScreenScraper 账号（用户名，非邮箱）以提升配额，留空则匿名访问。
 
 搜刮流程：
@@ -146,7 +153,17 @@ video = "media/示例游戏/video.mp4"
 
 设置页「测试连接」调用 `ssuserInfos.php` 校验凭据，失败时显示脱敏的请求诊断信息。
 
-## 六、Android 权限说明
+## 六、翻译（可选）
+
+手动搜索、游戏名与简介支持翻译，使用接口盒子（apihz.cn）聚合翻译接口：
+
+- 开发者 ID `10021309` 已内置，只需在「设置 → 翻译」填写通讯 KEY；
+- 含中文时译为英文（便于搜索），否则译为中文（便于名称/简介阅读）；
+- 翻译结果会写回输入框，可手动修改后再搜索或保存到 `savedeck.toml`；
+- 长简介会自动按句分段（单段不超过 1200 字符），段间留出间隔以适配免费账号
+  约 10 次/分钟的频次限制。
+
+## 七、Android 权限说明
 
 - 需声明并使用 `MANAGE_EXTERNAL_STORAGE`（所有文件访问权限），该权限无法通过运行时
   弹窗授予，只能跳转系统设置页开启。
@@ -154,6 +171,18 @@ video = "media/示例游戏/video.mp4"
   目录已自动保存，会自动重新扫描，无需重新选择。
 
 ## 七、版本记录
+
+### 0.0.3
+
+- 重做灰白动态毛玻璃界面；游戏详情页新增视频小窗与分项搜刮选择。
+- 手动搜刮改为后台队列，编辑界面内嵌进度条；移除一键搜刮与批量搜刮入口。
+- 应用图标改为自适应图标；设置菜单默认折叠，新增视频延时自动播放与保存时重命名 ROM 开关。
+- 适配横屏四列网格与手柄/键盘方向键导航；移除底部导航栏，设置入口移至顶部右侧。
+- 支持按类型删除 media 资源、保存时同步重命名媒体目录；添加 ROM 时跳过已在平台目录的文件。
+
+### 0.0.2
+
+- 修复 ScreenScraper 侧边/背面图被误当作正面封面的问题，新增翻译功能与平台映射表更新工具。
 
 ### 0.0.1
 

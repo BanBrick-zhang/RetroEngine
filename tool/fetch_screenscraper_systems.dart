@@ -11,7 +11,6 @@ import 'dart:io';
 /// 与 lib/services/screenscraper_service.dart 中的 ScreenscraperConfig 保持一致。
 const String devId = '';
 const String devPassword = '';
-const String softName = 'RetrEnging';
 
 const String outputPath = 'assets/screenscraper_systems.json';
 
@@ -19,7 +18,6 @@ Future<void> main() async {
   final uri = Uri.https('api.screenscraper.fr', '/api2/systemesListe.php', <String, String>{
     'devid': devId,
     'devpassword': devPassword,
-    'softname': softName,
     'output': 'json',
   });
 
@@ -27,7 +25,7 @@ Future<void> main() async {
   final client = HttpClient();
   try {
     final request = await client.getUrl(uri);
-    request.headers.set(HttpHeaders.userAgentHeader, 'RetrEnging/1.0');
+    request.headers.set(HttpHeaders.userAgentHeader, 'SaveDeckToolkit/1.0');
     final response = await request.close();
     final body = await response.transform(utf8.decoder).join();
 

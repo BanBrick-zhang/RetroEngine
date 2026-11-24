@@ -14,13 +14,12 @@ void main() {
     expect(uri.toString(), isNot(contains('+')));
   });
 
-  test('内置开发者凭据与 softname、默认语言为 en', () {
+  test('内置开发者凭据与默认语言为 en', () {
     final service = ScreenscraperService();
     expect(ScreenscraperConfig.devId, '');
     expect(ScreenscraperConfig.devPassword, '');
     expect(service.devIdOverride, '');
     expect(service.devPasswordOverride, '');
-    expect(service.softNameOverride, 'RetrEnging');
     expect(service.preferredLanguage, 'en');
   });
 
@@ -33,7 +32,7 @@ void main() {
     final auth = service.authForTesting;
     expect(auth['devid'], '');
     expect(auth['devpassword'], '');
-    expect(auth['softname'], 'RetrEnging');
+    expect(auth.containsKey('softname'), false);
     expect(auth['output'], 'json');
     expect(auth.containsKey('ssid'), false);
     expect(auth.containsKey('sspassword'), false);
@@ -48,14 +47,100 @@ void main() {
     expect(auth['sspassword'], 'testpass');
   });
 
-  test('构造参数可覆盖开发者凭据与 softname', () {
+  test('构造参数可覆盖开发者凭据', () {
     final service = ScreenscraperService(
       devId: '1234',
       devPassword: 'custom-pass',
-      softname: 'myapp',
     );
     expect(service.devIdOverride, '1234');
     expect(service.devPasswordOverride, 'custom-pass');
-    expect(service.softNameOverride, 'myapp');
+  });
+
+  group('封面媒体选择只取正面大图', () {
+    test('即使侧边图区域优先级更高，也只选 box-2D 正面', () {
+      final picked = ScreenscraperService.pickMedia(
+        <dynamic>[
+          <String, dynamic>{
+            'type': 'box-2D-side',
+            'region': 'wor',
+            'url': 'https://example.com/side.png',
+          },
+          <String, dynamic>{
+            'type': 'box-2D',
+            'region': 'eu',
+            'url': 'https://example.com/front.png',
+          },
+        ],
+        const <String>['box-2D', 'box-3D'],
+      );
+      expect(picked?['url'], 'https://example.com/front.png');
+    });
+
+    test('背面 box-2D-back 同样被排除', () {
+      final picked = ScreenscraperService.pickMedia(
+        <dynamic>[
+          <String, dynamic>{
+            'type': 'box-2D-back',
+            'region': 'wor',
+            'url': 'https://example.com/back.png',
+          },
+          <String, dynamic>{
+            'type': 'box-2D-side',
+            'region': 'us',
+            'url': 'https://example.com/spine.png',
+          },
+        ],
+        const <String>['box-2D', 'box-3D'],
+      );
+      expect(picked, isNull);
+    });
+
+    test('没有 box-2D 时回退到 box-3D 正面盒绘', () {
+      final picked = ScreenscraperService.pickMedia(
+        <dynamic>[
+          <String, dynamic>{
+            'type': 'box-2D-side',
+            'region': 'wor',
+            'url': 'https://example.com/side.png',
+          },
+          <String, dynamic>{
+            'type': 'box-3D',
+            'region': 'us',
+            'url': 'https://example.com/front3d.png',
+          },
+        ],
+        const <String>['box-2D', 'box-3D'],
+      );
+      expect(picked?['url'], 'https://example.com/front3d.png');
+    });
+
+    test('类型大小写、下划线写法归一化后仍精确命中正面', () {
+      final picked = ScreenscraperService.pickMedia(
+        <dynamic>[
+          <String, dynamic>{
+            'type': 'BOX_2D',
+            'region': 'wor',
+            'url': 'https://example.com/front.png',
+          },
+        ],
+        const <String>['box-2D'],
+      );
+      expect(picked?['url'], 'https://example.com/front.png');
+    });
+
+    test('忽略没有 url 的媒体项', () {
+      final picked = ScreenscraperService.pickMedia(
+        <dynamic>[
+          <String, dynamic>{'type': 'box-2D', 'region': 'wor'},
+          <String, dynamic>{
+            'type': 'box-2D',
+            'region': 'eu',
+            'url': 'https://example.com/front.png',
+          },
+        ],
+        const <String>['box-2D'],
+      );
+      expect(picked?['url'], 'https://example.com/front.png');
+    });
   });
 }

@@ -12,6 +12,10 @@ class PreferencesService {
   static const _downloadVideo = 'download_video';
   static const _overwriteDescription = 'overwrite_description';
   static const _autoId = 'auto_id';
+  static const _renameRomOnSave = 'rename_rom_on_save';
+  static const _renameMediaOnSave = 'rename_media_on_save';
+  static const _translateKey = 'translate_key';
+  static const _videoAutoPlayDelay = 'video_auto_play_delay';
 
   static Future<SharedPreferences> get _prefs => SharedPreferences.getInstance();
 
@@ -58,6 +62,29 @@ class PreferencesService {
   static Future<bool> get autoId async => (await _prefs).getBool(_autoId) ?? true;
   static Future<void> setAutoId(bool value) async =>
       (await _prefs).setBool(_autoId, value);
+
+  /// 保存时是否把 ROM 文件重命名为游戏名（保留扩展名）。
+  static Future<bool> get renameRomOnSave async =>
+      (await _prefs).getBool(_renameRomOnSave) ?? false;
+  static Future<void> setRenameRomOnSave(bool value) async =>
+      (await _prefs).setBool(_renameRomOnSave, value);
+
+  /// 保存时是否把 media 媒体目录重命名为游戏名。
+  static Future<bool> get renameMediaOnSave async =>
+      (await _prefs).getBool(_renameMediaOnSave) ?? false;
+  static Future<void> setRenameMediaOnSave(bool value) async =>
+      (await _prefs).setBool(_renameMediaOnSave, value);
+
+  /// 视频小窗自动播放延迟（秒）：0 表示不自动播放。
+  static Future<int> get videoAutoPlayDelay async =>
+      (await _prefs).getInt(_videoAutoPlayDelay) ?? 2;
+  static Future<void> setVideoAutoPlayDelay(int seconds) async =>
+      (await _prefs).setInt(_videoAutoPlayDelay, seconds);
+
+  static Future<String?> get translateKey async =>
+      (await _prefs).getString(_translateKey);
+  static Future<void> setTranslateKey(String value) async =>
+      (await _prefs).setString(_translateKey, value);
 
   static Future<void> clearAccount() async {
     final prefs = await _prefs;
