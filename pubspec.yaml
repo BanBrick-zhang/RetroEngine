@@ -1,8 +1,5 @@
-name: material_3_demo
-description:
-  A Flutter project showcasing supported Material 3 components, typography, color system and elevation.
-  Supports different light/dark mode, color seed, and comparison to Material 2.
-
+name: savedeck_toolkit
+description: "SaveDeck 游戏库管理与 ScreenScraper 搜刮工具"
 publish_to: "none"
 
 version: 1.0.0+1
@@ -15,6 +12,13 @@ dependencies:
     sdk: flutter
 
   cupertino_icons: ^1.0.2
+  http: ^0.13.5
+  path: ^1.8.0
+  path_provider: ^2.0.11
+  shared_preferences: ^2.0.15
+  permission_handler: ^9.0.0
+  crypto: ^3.0.2
+  uuid: ^3.0.6
 
 dev_dependencies:
   flutter_test:
@@ -24,3 +28,5 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/screenscraper_systems.json

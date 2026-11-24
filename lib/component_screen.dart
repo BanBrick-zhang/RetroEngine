@@ -109,10 +109,8 @@ class ButtonsWithoutIcon extends StatelessWidget {
           _colDivider,
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              // Foreground color
-              foregroundColor: Theme.of(context).colorScheme.onPrimary,
-              // Background color
-              backgroundColor: Theme.of(context).colorScheme.primary,
+              primary: Theme.of(context).colorScheme.primary,
+              onPrimary: Theme.of(context).colorScheme.onPrimary,
             ).copyWith(elevation: ButtonStyleButton.allOrNull(0.0)),
             onPressed: handlePressed(context, isDisabled, "FilledButton"),
             child: const Text('Filled'),
@@ -120,10 +118,8 @@ class ButtonsWithoutIcon extends StatelessWidget {
           _colDivider,
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              // Foreground color
-              foregroundColor: Theme.of(context).colorScheme.onSecondaryContainer,
-              // Background color
-              backgroundColor: Theme.of(context).colorScheme.secondaryContainer,
+              primary: Theme.of(context).colorScheme.secondaryContainer,
+              onPrimary: Theme.of(context).colorScheme.onSecondaryContainer,
             ).copyWith(elevation: ButtonStyleButton.allOrNull(0.0)),
             onPressed: handlePressed(context, isDisabled, "FilledTonalButton"),
             child: const Text('Filled Tonal'),
@@ -161,10 +157,8 @@ class ButtonsWithIcon extends StatelessWidget {
           _colDivider,
           ElevatedButton.icon(
             style: ElevatedButton.styleFrom(
-              // Foreground color
-              foregroundColor: Theme.of(context).colorScheme.onPrimary,
-              // Background color
-              backgroundColor: Theme.of(context).colorScheme.primary,
+              primary: Theme.of(context).colorScheme.primary,
+              onPrimary: Theme.of(context).colorScheme.onPrimary,
             ).copyWith(elevation: ButtonStyleButton.allOrNull(0.0)),
             onPressed: handlePressed(context, false, "FilledButton with Icon"),
             label: const Text('Icon'),
@@ -173,10 +167,8 @@ class ButtonsWithIcon extends StatelessWidget {
           _colDivider,
           ElevatedButton.icon(
             style: ElevatedButton.styleFrom(
-              // Foreground color
-              foregroundColor: Theme.of(context).colorScheme.onSecondaryContainer,
-              // Background color
-              backgroundColor: Theme.of(context).colorScheme.secondaryContainer,
+              primary: Theme.of(context).colorScheme.secondaryContainer,
+              onPrimary: Theme.of(context).colorScheme.onSecondaryContainer,
             ).copyWith(elevation: ButtonStyleButton.allOrNull(0.0)),
             onPressed:
                 handlePressed(context, false, "FilledTonalButton with Icon"),
