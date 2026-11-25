@@ -1,20 +1,26 @@
 // 调用 ScreenScraper systemesListe.php，生成 assets/screenscraper_systems.json。
 //
-// 用法（在项目根目录执行）：
-//   dart run tool/fetch_screenscraper_systems.dart
+// 用法（在项目根目录执行，凭据通过环境变量提供，源码中不保存）：
+//   SS_DEV_ID=<devid> SS_DEV_PASSWORD=<devpassword> \
+//     dart run tool/fetch_screenscraper_systems.dart
 //
 // 注意：需要有效的开发者凭据。若接口返回 "Erreur de login"，
 // 说明 devid/devpassword 未通过校验，脚本会保留原文件并退出。
 import 'dart:convert';
 import 'dart:io';
 
-/// 与 lib/services/screenscraper_service.dart 中的 ScreenscraperConfig 保持一致。
-const String devId = '';
-const String devPassword = '';
+/// 从环境变量读取开发者凭据。
+final String devId = Platform.environment['SS_DEV_ID'] ?? '';
+final String devPassword = Platform.environment['SS_DEV_PASSWORD'] ?? '';
 
 const String outputPath = 'assets/screenscraper_systems.json';
 
 Future<void> main() async {
+  if (devId.isEmpty || devPassword.isEmpty) {
+    stderr.writeln('缺少开发者凭据，请通过环境变量 SS_DEV_ID / SS_DEV_PASSWORD 提供。');
+    exitCode = 1;
+    return;
+  }
   final uri = Uri.https('api.screenscraper.fr', '/api2/systemesListe.php', <String, String>{
     'devid': devId,
     'devpassword': devPassword,

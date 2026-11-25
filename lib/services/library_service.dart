@@ -440,7 +440,52 @@ class LibraryService {
     if (p.equals(source.path, target.path)) return relative;
 
     await source.rename(target.path);
+    // 多碟镜像（.cue/.gdi/.m3u）需同步重命名同伴文件并修正内部引用，
+    // 否则改名后镜像无法被模拟器加载。
+    await _renameDiscCompanions(platform, relative, candidate);
     return candidate;
+  }
+
+  /// 把 `<旧基名>.*` 的同伴文件（.bin 等）一起改名，并修正索引文件中的引用。
+  static Future<void> _renameDiscCompanions(
+    PlatformLibrary platform,
+    String oldRelative,
+    String newRelative,
+  ) async {
+    const textIndexExts = <String>{'.cue', '.gdi', '.m3u', '.toc'};
+    final ext = p.extension(oldRelative).toLowerCase();
+    if (!textIndexExts.contains(ext)) return;
+
+    final oldBase = p.basenameWithoutExtension(oldRelative);
+    final newBase = p.basenameWithoutExtension(newRelative);
+    final oldDir = p.dirname(p.join(platform.directory, oldRelative));
+    final newDir = p.dirname(p.join(platform.directory, newRelative));
+    final dir = Directory(oldDir);
+    if (!await dir.exists()) return;
+
+    for (final entity in await dir.list().toList()) {
+      if (entity is! File) continue;
+      if (p.extension(entity.path).toLowerCase() == ext) continue;
+      final base = p.basenameWithoutExtension(entity.path);
+      if (base == oldBase) {
+        final target = File(p.join(newDir,
+            '$newBase${p.extension(entity.path)}'));
+        if (!await target.exists()) await entity.rename(target.path);
+      }
+    }
+
+    // 修正索引文件里对旧基名的引用（如 FILE "Game.bin" BINARY）。
+    final indexFile = File(p.join(platform.directory, newRelative));
+    try {
+      final content = await indexFile.readAsString();
+      if (content.contains(oldBase)) {
+        await indexFile.writeAsString(
+            content.replaceAll(oldBase, newBase),
+            flush: true);
+      }
+    } catch (_) {
+      // 非文本索引或读取失败时忽略，不影响 ROM 本身可用。
+    }
   }
 
   /// 为游戏创建媒体目录并返回其绝对路径。
@@ -454,35 +499,120 @@ class LibraryService {
   static String mediaRelativePath(String gameName, String fileName) =>
       p.join('media', _safeName(gameName), fileName).replaceAll('\\', '/');
 
-  /// 把媒体目录重命名为新游戏名，并同步修正 cover/video 相对路径。
-  /// 目标目录已存在时合并文件后删除旧目录，不覆盖已有文件。
+  /// 从 `media/<目录名>/xxx` 形式的相对路径中取出媒体目录名。
+  static String? mediaFolderName(String? relativePath) {
+    if (relativePath == null || relativePath.isEmpty) return null;
+    final parts = relativePath.replaceAll('\\', '/').split('/');
+    if (parts.length >= 3 && parts.first.toLowerCase() == 'media') {
+      return parts[1];
+    }
+    return null;
+  }
+
+  /// 更改游戏名后同步 ROM 文件名与 `media/<游戏名>/` 目录，并修正路径。
+  ///
+  /// 旧媒体目录名优先从 cover/video 的实际路径推断，其次才回退到旧游戏名，
+  /// 这样即使游戏名此前被外部工具改过（或搜刮时用译名建过目录）也能正确迁移。
+  static Future<GameEntry> syncGameName(
+    PlatformLibrary platform,
+    GameEntry game,
+    String newName, {
+    bool renameRom = true,
+    bool renameMedia = true,
+  }) async {
+    final target = _safeName(newName);
+    if (target.isEmpty) return game;
+    var updated = game;
+
+    if (renameRom) {
+      final romBase = _safeName(p.basenameWithoutExtension(game.file));
+      if (romBase != target) {
+        final renamed = await renameRomFile(platform, updated, newName);
+        if (renamed != updated.file) updated = updated.copyWith(file: renamed);
+      }
+    }
+
+    if (renameMedia) {
+      final oldFolder = mediaFolderName(game.cover) ??
+          mediaFolderName(game.video) ??
+          _safeName(game.name);
+      if (oldFolder != target) {
+        await _moveMediaDirectory(platform, oldFolder, target);
+      }
+      String? fix(String? value) {
+        final folder = mediaFolderName(value);
+        if (folder == null) return value;
+        return value!.replaceFirst('media/$folder/', 'media/$target/');
+      }
+
+      updated = updated.copyWith(
+        cover: fix(updated.cover),
+        video: fix(updated.video),
+        clearCover: updated.cover == null,
+        clearVideo: updated.video == null,
+      );
+    }
+
+    return updated.copyWith(name: newName);
+  }
+
+  /// 把 `media/<oldFolder>` 移动到 `media/<newFolder>`。
+  ///
+  /// 目标已存在时递归合并，同名文件保留目标侧（通常是刚下载的新媒体），
+  /// 不覆盖已有文件，最后删除旧目录。
+  static Future<void> _moveMediaDirectory(
+    PlatformLibrary platform,
+    String oldFolder,
+    String newFolder,
+  ) async {
+    if (oldFolder == newFolder) return;
+    final mediaRoot = Directory(p.join(platform.directory, 'media'));
+    final oldDir = Directory(p.join(mediaRoot.path, oldFolder));
+    if (!await oldDir.exists()) return;
+    final newDir = Directory(p.join(mediaRoot.path, newFolder));
+
+    if (await newDir.exists()) {
+      final entities =
+          await oldDir.list(recursive: true, followLinks: false).toList();
+      for (final entity in entities) {
+        if (entity is! File) continue;
+        final relative = p.relative(entity.path, from: oldDir.path);
+        final target = File(p.join(newDir.path, relative));
+        await target.parent.create(recursive: true);
+        if (!await target.exists()) await entity.copy(target.path);
+      }
+      await oldDir.delete(recursive: true);
+    } else {
+      await newDir.parent.create(recursive: true);
+      try {
+        await oldDir.rename(newDir.path);
+      } catch (_) {
+        // 跨文件系统/权限限制时退化为复制后删除。
+        await newDir.create(recursive: true);
+        for (final entity in await oldDir.list().toList()) {
+          if (entity is File) {
+            await entity.copy(p.join(newDir.path, p.basename(entity.path)));
+          }
+        }
+        await oldDir.delete(recursive: true);
+      }
+    }
+  }
+
+  /// 仅重命名媒体目录（兼容旧调用），路径修正交给 [syncGameName]。
   static Future<GameEntry> renameMediaDirectory(
     PlatformLibrary platform,
     GameEntry game,
     String oldName,
     String newName,
   ) async {
-    final oldSafe = _safeName(oldName);
-    final newSafe = _safeName(newName);
-    if (oldSafe == newSafe) return game;
-    final oldDir = Directory(p.join(platform.directory, 'media', oldSafe));
-    if (!await oldDir.exists()) return game;
-    final newDir = Directory(p.join(platform.directory, 'media', newSafe));
-
-    if (await newDir.exists()) {
-      for (final entity in await oldDir.list().toList()) {
-        if (entity is File) {
-          final target = File(p.join(newDir.path, p.basename(entity.path)));
-          if (!await target.exists()) await entity.copy(target.path);
-        }
-      }
-      await oldDir.delete(recursive: true);
-    } else {
-      await oldDir.rename(newDir.path);
-    }
-
+    final oldFolder =
+        mediaFolderName(game.cover) ?? mediaFolderName(game.video) ?? _safeName(oldName);
+    final newFolder = _safeName(newName);
+    if (oldFolder == newFolder) return game;
+    await _moveMediaDirectory(platform, oldFolder, newFolder);
     String? fix(String? value) =>
-        value?.replaceFirst('media/$oldSafe/', 'media/$newSafe/');
+        value?.replaceFirst('media/$oldFolder/', 'media/$newFolder/');
     return game.copyWith(
       cover: fix(game.cover),
       video: fix(game.video),

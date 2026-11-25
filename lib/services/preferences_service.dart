@@ -64,14 +64,17 @@ class PreferencesService {
       (await _prefs).setBool(_autoId, value);
 
   /// 保存时是否把 ROM 文件重命名为游戏名（保留扩展名）。
+  ///
+  /// 默认开启：改名后 ROM 与 `media/游戏名/` 目录保持一致，
+  /// 避免 TOML 中的 `file`/`cover` 与磁盘实际文件名脱节。
   static Future<bool> get renameRomOnSave async =>
-      (await _prefs).getBool(_renameRomOnSave) ?? false;
+      (await _prefs).getBool(_renameRomOnSave) ?? true;
   static Future<void> setRenameRomOnSave(bool value) async =>
       (await _prefs).setBool(_renameRomOnSave, value);
 
   /// 保存时是否把 media 媒体目录重命名为游戏名。
   static Future<bool> get renameMediaOnSave async =>
-      (await _prefs).getBool(_renameMediaOnSave) ?? false;
+      (await _prefs).getBool(_renameMediaOnSave) ?? true;
   static Future<void> setRenameMediaOnSave(bool value) async =>
       (await _prefs).setBool(_renameMediaOnSave, value);
 

@@ -159,13 +159,30 @@ class BackgroundScrapeService extends ChangeNotifier {
     final language = await PreferencesService.language;
     final devId = await PreferencesService.ssDevId;
     final devPassword = await PreferencesService.ssDevPassword;
-    final service = ScreenscraperService(
-      username: username,
-      password: password,
-      preferredLanguage: language,
-      devId: devId,
-      devPassword: devPassword,
-    );
+
+    final ScreenscraperService service;
+    try {
+      service = ScreenscraperService(
+        username: username,
+        password: password,
+        preferredLanguage: language,
+        devId: devId,
+        devPassword: devPassword,
+      );
+    } catch (e) {
+      // 缺少开发者凭据等致命配置错误：一次性失败掉所有排队任务。
+      for (final job in _queue) {
+        _statuses[job.key] = '失败：$e';
+      }
+      _failed += _queue.length;
+      _completed += _queue.length;
+      _queue.clear();
+      _running = false;
+      _currentName = '';
+      _message = '后台搜刮未开始：$e';
+      _notify();
+      return;
+    }
 
     while (_queue.isNotEmpty) {
       final job = _queue.removeFirst();

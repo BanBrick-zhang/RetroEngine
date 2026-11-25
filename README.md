@@ -2,7 +2,7 @@
 
 基于 Flutter 的 **SaveDeck 游戏库管理 + ScreenScraper 自动搜刮工具**，仅面向 Android。
 
-[GitHub 仓库](https://github.com/BanBrick-zhang/RetroEngine) · [问题反馈](https://github.com/BanBrick-zhang/RetroEngine/issues) · 当前版本：`0.0.3`
+[GitHub 仓库](https://github.com/BanBrick-zhang/RetroEngine) · [问题反馈](https://github.com/BanBrick-zhang/RetroEngine/issues) · 当前版本：`0.0.6`
 
 RetroEngine（pubspec 包名 `savedeck_toolkit`）直接读写设备共享存储中的游戏库目录，识别各平台 ROM 与 `savedeck.toml`，并从 ScreenScraper.fr 拉取封面（box-2D）、视频与简介，写回配置与 `media/` 目录。
 
@@ -139,14 +139,26 @@ video = "media/示例游戏/video.mp4"
 
 ## 五、ScreenScraper 搜刮
 
-开发者凭据已内置在 `lib/services/screenscraper_service.dart` 的
-`ScreenscraperConfig`（`devid` / `devpassword`），无需在应用内填写。
-设置页只需**可选**填写 ScreenScraper 账号（用户名，非邮箱）以提升配额，留空则匿名访问。
+源码与仓库中**不包含**任何 ScreenScraper 开发者凭据。开发者凭据有两种提供方式：
+
+1. 构建注入（推荐分发时使用）：
+
+   ```bash
+   flutter build apk \
+     --dart-define=SS_DEV_ID=<你的 devid> \
+     --dart-define=SS_DEV_PASSWORD=<你的 devpassword>
+   ```
+
+2. 应用内填写：在「设置 → ScreenScraper 账号」中填写开发者 `devid` /
+   `devpassword`，保存到本机 `shared_preferences`。设置页的值优先于构建注入值。
+
+个人 ScreenScraper 账号（用户名，非邮箱）为**可选**，填写后可提升配额，留空则匿名访问。
 
 搜刮流程：
 
 1. 平台 `systemeid` 来自 `assets/screenscraper_systems.json`，该文件由
-   `systemesListe.php` 生成，可运行 `dart run tool/fetch_screenscraper_systems.dart` 刷新；
+   `systemesListe.php` 生成，可运行
+   `SS_DEV_ID=<devid> SS_DEV_PASSWORD=<devpassword> dart run tool/fetch_screenscraper_systems.dart` 刷新；
 2. 用 `jeuRecherche.php` 按 `recherche` + `systemeid` 搜索，结果全部展示供用户手动选择；
 3. 选定后通过 `jeuInfos.php` 获取 box-2D 封面、视频与简介（默认 en），
    下载到 `media/<游戏名>/` 并写回 `savedeck.toml`。
@@ -170,7 +182,22 @@ video = "media/示例游戏/video.mp4"
 - 绑定目录后应用会引导跳转「特殊应用权限 → 所有文件访问权限」；开启后返回应用，
   目录已自动保存，会自动重新扫描，无需重新选择。
 
-## 七、版本记录
+## 八、版本记录
+
+### 0.0.6
+
+- 移除源码中硬编码的 ScreenScraper 开发者凭据，改为构建期 `--dart-define`
+  （`SS_DEV_ID` / `SS_DEV_PASSWORD`）注入或在设置页填写；映射表工具改用环境变量提供凭据。
+- 搜刮任务改为后台队列，编辑页内嵌进度条；新增中英翻译，长文本自动分段。
+- 更新自适应启动图标与仓库文档。
+
+### 0.0.5
+
+- 新增统一页面切换动画（淡入 + 轻微上移）与淡入缩放的加载指示器，页面切换更连贯。
+- 游戏库支持手柄快捷键：A 打开当前平台首个游戏、X 添加 ROM、L/R 切换平台、
+  START 打开设置，底部常驻按键提示。
+- 设置页适配安全区并统一背景，保存时默认开启 media 媒体目录重命名。
+- 更新自适应应用图标。
 
 ### 0.0.3
 

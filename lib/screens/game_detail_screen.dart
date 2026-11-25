@@ -300,37 +300,23 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
 
   Future<void> _save() async {
     var updated = _currentGame();
-    final index = widget.platform.games.indexWhere((g) => g.file == widget.game.file);
+    final index =
+        widget.platform.games.indexWhere((g) => g.file == widget.game.file);
+    // 以库中实际条目为基准：widget.game 可能是打开本页时的快照，
+    // 之后被后台搜刮更新过（名称/封面已变），直接用旧名会找不到媒体目录。
+    final stored = index >= 0 ? widget.platform.games[index] : widget.game;
     final newName = updated.name.trim();
-    if (newName.isNotEmpty &&
-        newName != widget.game.name &&
-        await PreferencesService.renameRomOnSave) {
+    if (newName.isNotEmpty && newName != stored.name) {
       try {
-        final renamed = await LibraryService.renameRomFile(
-          widget.platform,
-          widget.game,
-          newName,
-        );
-        if (renamed != widget.game.file) {
-          updated = updated.copyWith(file: renamed);
-        }
-      } catch (e) {
-        if (mounted) _showMessage('ROM 重命名失败：$e');
-        return;
-      }
-    }
-    if (newName.isNotEmpty &&
-        newName != widget.game.name &&
-        await PreferencesService.renameMediaOnSave) {
-      try {
-        updated = await LibraryService.renameMediaDirectory(
+        updated = await LibraryService.syncGameName(
           widget.platform,
           updated,
-          widget.game.name,
           newName,
+          renameRom: await PreferencesService.renameRomOnSave,
+          renameMedia: await PreferencesService.renameMediaOnSave,
         );
       } catch (e) {
-        if (mounted) _showMessage('媒体目录重命名失败：$e');
+        if (mounted) _showMessage('同步 ROM / 媒体文件名失败：$e');
         return;
       }
     }

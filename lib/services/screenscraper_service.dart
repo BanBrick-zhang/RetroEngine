@@ -9,18 +9,37 @@ import '../models/library.dart';
 import 'library_service.dart';
 import 'toml_service.dart';
 
-/// ScreenScraper 开发者凭据（内置，无需在应用内填写）。
+/// ScreenScraper 开发者凭据配置。
+///
+/// 公开仓库不应硬编码真实凭据，凭据在**构建时**通过 `--dart-define` 注入：
+///
+/// ```
+/// flutter build apk \
+///   --dart-define=SS_DEV_ID=<devid> \
+///   --dart-define=SS_DEV_PASSWORD=<devpassword>
+/// ```
+///
+/// 也可在 CI 环境变量中配置。未注入时，用户需在「设置」中自行填写
+/// 开发者凭据（会持久化到本地），源码与版本库中不再包含任何真实凭据。
 class ScreenscraperConfig {
-  static const String devId = '';
-  static const String devPassword = '';
+  /// 构建期注入的开发者 ID（`--dart-define=SS_DEV_ID=...`）。
+  static const String buildDevId = String.fromEnvironment('SS_DEV_ID');
+
+  /// 构建期注入的开发者密码（`--dart-define=SS_DEV_PASSWORD=...`）。
+  static const String buildDevPassword =
+      String.fromEnvironment('SS_DEV_PASSWORD');
 
   /// 搜刮默认语言（简介等文本优先 en）。
   static const String defaultLanguage = 'en';
+
+  /// 是否具备可用的开发者凭据。
+  static bool get hasBuildCredentials =>
+      buildDevId.isNotEmpty && buildDevPassword.isNotEmpty;
 }
 
 /// ScreenScraper.fr API v2 客户端。
 ///
-/// 开发者凭据内置在 [ScreenscraperConfig]，无需在设置页填写；
+/// 开发者凭据优先使用调用方传入值（「设置」中保存），其次使用构建期注入值；
 /// 用户账号为可选（填写后可提升配额），未配置时以匿名访客身份调用。
 class ScreenscraperService {
   static const String host = 'api.screenscraper.fr';
@@ -40,11 +59,22 @@ class ScreenscraperService {
   })  : username = username ?? '',
         password = password ?? '',
         devIdOverride = (devId == null || devId.isEmpty)
-            ? ScreenscraperConfig.devId
+            ? ScreenscraperConfig.buildDevId
             : devId,
         devPasswordOverride = (devPassword == null || devPassword.isEmpty)
-            ? ScreenscraperConfig.devPassword
-            : devPassword;
+            ? ScreenscraperConfig.buildDevPassword
+            : devPassword {
+    if (!hasDevCredentials) {
+      throw const SsException(
+        '尚未配置 ScreenScraper 开发者凭据。\n'
+        '请在「设置 → ScreenScraper 开发者凭据」中填写 devid / devpassword，'
+        '或在构建时通过 --dart-define=SS_DEV_ID / SS_DEV_PASSWORD 注入。',
+      );
+    }
+  }
+
+  bool get hasDevCredentials =>
+      devIdOverride.isNotEmpty && devPasswordOverride.isNotEmpty;
 
   bool get hasUserAccount => username.isNotEmpty && password.isNotEmpty;
 
@@ -121,7 +151,7 @@ class ScreenscraperService {
     if (status == 403 || status == 401) {
       throw const SsException(
         'ScreenScraper 拒绝访问（HTTP 403/401）：开发者凭据或用户账号无效。'
-        '开发者凭据已内置，请检查「设置」中的账号信息后重试。',
+        '请检查「设置」中的开发者凭据与账号信息后重试。',
       );
     }
     if (status == 423) {
@@ -145,8 +175,9 @@ class ScreenscraperService {
       if (raw.contains('identifiants developpeur') ||
           raw.contains('identifiants développeur')) {
         throw SsException(
-          'ScreenScraper 开发者凭据无效（devid/devpassword 已内置）：$raw\n'
-          '请确认该开发者账号已在 ScreenScraper 后台激活，或联系维护者更新凭据。',
+          'ScreenScraper 开发者凭据无效（devid/devpassword）：$raw\n'
+          '请确认该开发者账号已在 ScreenScraper 后台激活，'
+          '并在「设置」中更新凭据后重试。',
         );
       }
       if (raw.contains('identifiants utilisateurs') ||
@@ -199,7 +230,8 @@ class ScreenscraperService {
     }
     if (response.statusCode == 403) {
       throw const SsException(
-        '凭据校验失败：请确认用户名为 ScreenScraper 账号用户名（非邮箱）；开发者凭据已内置。',
+        '凭据校验失败：请确认用户名为 ScreenScraper 账号用户名（非邮箱），'
+        '并检查「设置」中的开发者凭据是否有效。',
       );
     }
     if (response.statusCode != 200) {
@@ -351,27 +383,20 @@ class ScreenscraperService {
 
     final oldName = game.name;
     final newName = detail.name.isNotEmpty ? detail.name : oldName;
+
+    // 名称变化时一次性迁移媒体目录并修正 TOML 路径（搜刮不改 ROM 文件名）。
+    if (newName != oldName) {
+      game = await LibraryService.syncGameName(
+        platform,
+        game,
+        newName,
+        renameRom: false,
+        renameMedia: true,
+      );
+    }
     var cover = game.cover;
     var video = game.video;
     var description = game.description;
-
-    // 名称变化时迁移原有媒体目录，并修正 TOML 中的相对路径。
-    if (newName != oldName) {
-      final oldDir = Directory(p.join(platform.directory, 'media', _safeName(oldName)));
-      final newDir = Directory(p.join(platform.directory, 'media', _safeName(newName)));
-      if (await oldDir.exists() && oldDir.path != newDir.path) {
-        await newDir.create(recursive: true);
-        for (final entity in await oldDir.list().toList()) {
-          if (entity is File) {
-            await entity.copy(p.join(newDir.path, p.basename(entity.path)));
-          }
-        }
-      }
-      cover = cover?.replaceFirst(
-          'media/${_safeName(oldName)}/', 'media/${_safeName(newName)}/');
-      video = video?.replaceFirst(
-          'media/${_safeName(oldName)}/', 'media/${_safeName(newName)}/');
-    }
 
     final mediaDir = await LibraryService.mediaDirectory(platform, newName);
 
@@ -468,9 +493,6 @@ class ScreenscraperService {
       onDownloadProgress: onDownloadProgress,
     );
   }
-
-  static String _safeName(String name) =>
-      name.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
 
   static String _mediaExtension(String? format, String fallback) {
     if (format == null || format.isEmpty) return fallback;

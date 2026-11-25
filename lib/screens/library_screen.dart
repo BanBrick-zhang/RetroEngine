@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 
 import '../models/library.dart';
@@ -41,17 +42,58 @@ class _LibraryScreenState extends State<LibraryScreen>
   /// 是否因缺少权限而等待用户从系统设置返回后自动继续选择目录。
   bool _pendingChoose = false;
 
+  late final FocusNode _gamepadFocus;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _gamepadFocus = FocusNode(debugLabel: 'gamepad');
     _load();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _gamepadFocus.dispose();
     super.dispose();
+  }
+
+  /// 手柄按键：A 打开游戏、X 添加 ROM、L/R 切换平台、START 设置。
+  void _handleGamepadKey(RawKeyEvent event) {
+    if (event is! RawKeyDownEvent) return;
+    final key = event.logicalKey;
+    if (key == LogicalKeyboardKey.gameButtonA ||
+        key == LogicalKeyboardKey.enter) {
+      if (_platforms.isNotEmpty && !_loading) {
+        final platform = _platforms[_selected];
+        if (platform.games.isNotEmpty) {
+          _openGame(platform, platform.games.first);
+        }
+      }
+    } else if (key == LogicalKeyboardKey.gameButtonX ||
+        key == LogicalKeyboardKey.keyX) {
+      if (_platforms.isNotEmpty) _addRom();
+    } else if (key == LogicalKeyboardKey.gameButtonLeft1 ||
+        key == LogicalKeyboardKey.gameButtonLeft2 ||
+        key == LogicalKeyboardKey.keyQ) {
+      _switchPlatform(-1);
+    } else if (key == LogicalKeyboardKey.gameButtonRight1 ||
+        key == LogicalKeyboardKey.gameButtonRight2 ||
+        key == LogicalKeyboardKey.keyE) {
+      _switchPlatform(1);
+    } else if (key == LogicalKeyboardKey.gameButtonStart ||
+        key == LogicalKeyboardKey.escape) {
+      _openSettings();
+    }
+  }
+
+  void _switchPlatform(int delta) {
+    if (_platforms.isEmpty || _loading) return;
+    setState(() {
+      _selected = (_selected + delta) % _platforms.length;
+      if (_selected < 0) _selected += _platforms.length;
+    });
   }
 
   @override
@@ -179,21 +221,79 @@ class _LibraryScreenState extends State<LibraryScreen>
               icon: const Icon(Icons.add),
               label: const Text('添加 ROM'),
             ),
-      body: AppTheme.backdrop(
-        child: _loading
-            ? const Center(child: CircularProgressIndicator(color: AppTheme.accent))
-            : _error != null
-                ? _errorView()
-                : _platforms.isEmpty
-                    ? _emptyView()
-                    : _libraryView(),
+      body: RawKeyboardListener(
+        focusNode: _gamepadFocus,
+        autofocus: true,
+        onKey: _handleGamepadKey,
+        child: Stack(
+          children: [
+            AppTheme.backdrop(
+              child: _loading
+                  ? const Center(child: GlassLoader(message: '正在扫描游戏库…'))
+                  : _error != null
+                      ? _errorView()
+                      : _platforms.isEmpty
+                          ? _emptyView()
+                          : _libraryView(),
+            ),
+            _buildGamepadHint(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 底部手柄按键指示：左侧 A/X，右侧 L/R 与 START。
+  Widget _buildGamepadHint() {
+    Widget chip(String key, String label) => Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.75),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: AppTheme.border),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(key,
+                  style: const TextStyle(
+                      color: AppTheme.accent,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700)),
+              const SizedBox(width: 4),
+              Text(label,
+                  style: const TextStyle(
+                      color: AppTheme.textSecondary, fontSize: 10)),
+            ],
+          ),
+        );
+
+    return Positioned(
+      left: 12,
+      right: 12,
+      bottom: 8,
+      child: IgnorePointer(
+        child: Row(
+          children: [
+            chip('A', '打开'),
+            const SizedBox(width: 6),
+            chip('X', '添加'),
+            const Spacer(),
+            chip('L', '切换平台'),
+            const SizedBox(width: 6),
+            chip('R', '切换平台'),
+            const SizedBox(width: 6),
+            chip('START', '设置'),
+          ],
+        ),
       ),
     );
   }
 
   Future<void> _openSettings() async {
     await Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
+      AppPageRoute<void>(
+        settings: const RouteSettings(name: 'settings'),
         builder: (_) => SettingsScreen(onLibraryChanged: (_) {}),
       ),
     );
@@ -286,7 +386,7 @@ class _LibraryScreenState extends State<LibraryScreen>
     final root = _boundPath ?? await LibraryService.defaultRoot();
     if (!mounted) return;
     final path = await Navigator.of(context).push<String>(
-      MaterialPageRoute(
+      AppPageRoute(
         builder: (_) => FileBrowserScreen(initialPath: root, title: '选择游戏库总目录'),
       ),
     );
@@ -565,7 +665,7 @@ class _LibraryScreenState extends State<LibraryScreen>
 
   Future<void> _openGame(PlatformLibrary platform, GameEntry game) async {
     final result = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(builder: (_) => GameDetailScreen(platform: platform, game: game)),
+      AppPageRoute(builder: (_) => GameDetailScreen(platform: platform, game: game)),
     );
     if (result == true) await _load();
   }
@@ -667,7 +767,7 @@ class _LibraryScreenState extends State<LibraryScreen>
     final root = await LibraryService.defaultRoot();
     if (!mounted) return;
     final romPath = await Navigator.of(context).push<String>(
-      MaterialPageRoute(
+      AppPageRoute(
         builder: (_) => FileBrowserScreen(
           initialPath: root,
           mode: FileBrowserMode.file,
@@ -698,7 +798,7 @@ class _LibraryScreenState extends State<LibraryScreen>
 
     if (mounted) {
       final result = await Navigator.of(context).push<bool>(
-        MaterialPageRoute(
+        AppPageRoute(
           builder: (_) => GameDetailScreen(platform: targetPlatform, game: entry),
         ),
       );

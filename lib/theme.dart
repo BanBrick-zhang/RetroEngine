@@ -3,6 +3,39 @@ import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 
+/// 统一的页面弹出动画：淡入 + 轻微上移，约 240ms。
+class AppPageRoute<T> extends MaterialPageRoute<T> {
+  AppPageRoute({required WidgetBuilder builder, RouteSettings? settings})
+      : super(builder: builder, settings: settings ?? const RouteSettings());
+
+  @override
+  Duration get transitionDuration => const Duration(milliseconds: 240);
+
+  @override
+  Widget buildTransitions(
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) {
+    final curved = CurvedAnimation(
+      parent: animation,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
+    );
+    return FadeTransition(
+      opacity: curved,
+      child: SlideTransition(
+        position: Tween<Offset>(
+          begin: const Offset(0, 0.04),
+          end: Offset.zero,
+        ).animate(curved),
+        child: child,
+      ),
+    );
+  }
+}
+
 /// 统一的灰白色毛玻璃视觉风格。
 class AppTheme {
   static const Color background = Color(0xFFF3F5F7);
@@ -369,6 +402,66 @@ class GlassChip extends StatelessWidget {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 带淡入缩放效果的加载指示器。
+class GlassLoader extends StatefulWidget {
+  final String? message;
+  final double size;
+
+  const GlassLoader({super.key, this.message, this.size = 22});
+
+  @override
+  State<GlassLoader> createState() => _GlassLoaderState();
+}
+
+class _GlassLoaderState extends State<GlassLoader>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 400),
+    )..forward();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: _controller,
+      child: ScaleTransition(
+        scale: Tween<double>(begin: 0.9, end: 1).animate(
+          CurvedAnimation(parent: _controller, curve: Curves.easeOutBack),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: widget.size,
+              height: widget.size,
+              child: const CircularProgressIndicator(
+                  strokeWidth: 2.5, color: AppTheme.accent),
+            ),
+            if (widget.message != null) ...[
+              const SizedBox(height: 12),
+              Text(widget.message!,
+                  style: const TextStyle(
+                      color: AppTheme.textSecondary, fontSize: 12)),
+            ],
+          ],
         ),
       ),
     );

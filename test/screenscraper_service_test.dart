@@ -14,24 +14,36 @@ void main() {
     expect(uri.toString(), isNot(contains('+')));
   });
 
-  test('内置开发者凭据与默认语言为 en', () {
-    final service = ScreenscraperService();
-    expect(ScreenscraperConfig.devId, '');
-    expect(ScreenscraperConfig.devPassword, '');
-    expect(service.devIdOverride, '');
-    expect(service.devPasswordOverride, '');
+  test('源码不内置开发者凭据', () {
+    // 未通过 --dart-define 或构造参数提供凭据时，应直接报错而不是使用硬编码值。
+    expect(
+      () => ScreenscraperService(),
+      throwsA(isA<SsException>()),
+    );
+  });
+
+  test('开发者凭据由构造参数提供，默认语言为 en', () {
+    final service = ScreenscraperService(
+      devId: 'test-dev-id',
+      devPassword: 'test-dev-pass',
+    );
+    expect(service.devIdOverride, 'test-dev-id');
+    expect(service.devPasswordOverride, 'test-dev-pass');
     expect(service.preferredLanguage, 'en');
   });
 
   test('未配置账号时匿名访问，不携带 ssid/sspassword', () {
-    final service = ScreenscraperService();
+    final service = ScreenscraperService(
+      devId: 'test-dev-id',
+      devPassword: 'test-dev-pass',
+    );
     expect(service.username, '');
     expect(service.password, '');
     expect(service.hasUserAccount, false);
 
     final auth = service.authForTesting;
-    expect(auth['devid'], '');
-    expect(auth['devpassword'], '');
+    expect(auth['devid'], 'test-dev-id');
+    expect(auth['devpassword'], 'test-dev-pass');
     expect(auth.containsKey('softname'), false);
     expect(auth['output'], 'json');
     expect(auth.containsKey('ssid'), false);
@@ -39,21 +51,17 @@ void main() {
   });
 
   test('配置账号后携带 ssid/sspassword', () {
-    final service = ScreenscraperService(username: 'testuser', password: 'testpass');
+    final service = ScreenscraperService(
+      username: 'testuser',
+      password: 'testpass',
+      devId: 'test-dev-id',
+      devPassword: 'test-dev-pass',
+    );
     expect(service.hasUserAccount, true);
 
     final auth = service.authForTesting;
     expect(auth['ssid'], 'testuser');
     expect(auth['sspassword'], 'testpass');
-  });
-
-  test('构造参数可覆盖开发者凭据', () {
-    final service = ScreenscraperService(
-      devId: '1234',
-      devPassword: 'custom-pass',
-    );
-    expect(service.devIdOverride, '1234');
-    expect(service.devPasswordOverride, 'custom-pass');
   });
 
   group('封面媒体选择只取正面大图', () {

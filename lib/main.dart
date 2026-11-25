@@ -147,9 +147,7 @@ class _SaveDeckToolkitAppState extends State<SaveDeckToolkitApp>
         backgroundColor: AppTheme.background,
         body: AppTheme.backdrop(
           child: _checkingPermission
-              ? const Center(
-                  child: CircularProgressIndicator(color: AppTheme.accent),
-                )
+              ? const Center(child: GlassLoader(message: '正在检查权限…'))
               : Column(
                   children: [
                     if (_permissionMessage != null)
