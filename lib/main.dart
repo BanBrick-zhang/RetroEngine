@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show LogicalKeyboardKey;
 
@@ -42,6 +44,11 @@ class _SaveDeckToolkitAppState extends State<SaveDeckToolkitApp>
   bool _checkingPermission = true;
   String? _permissionMessage;
 
+  /// 后台搜刮完成后，顶部提示条在 1 秒后自动隐藏。
+  Timer? _bannerTimer;
+  bool _hideCompletedBanner = false;
+  bool _wasScrapeRunning = false;
+
   @override
   void initState() {
     super.initState();
@@ -52,13 +59,30 @@ class _SaveDeckToolkitAppState extends State<SaveDeckToolkitApp>
 
   @override
   void dispose() {
+    _bannerTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     BackgroundScrapeService.instance.removeListener(_onBackgroundChanged);
     super.dispose();
   }
 
   void _onBackgroundChanged() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    final running = BackgroundScrapeService.instance.status.running;
+    if (running) {
+      // 新一轮搜刮开始：取消隐藏计时并重新显示提示条。
+      _bannerTimer?.cancel();
+      _bannerTimer = null;
+      _hideCompletedBanner = false;
+    } else if (_wasScrapeRunning) {
+      // 队列刚结束：完成提示只保留 1 秒。
+      _bannerTimer?.cancel();
+      _bannerTimer = Timer(const Duration(seconds: 1), () {
+        if (!mounted) return;
+        setState(() => _hideCompletedBanner = true);
+      });
+    }
+    _wasScrapeRunning = running;
+    setState(() {});
   }
 
   @override
@@ -198,7 +222,8 @@ class _SaveDeckToolkitAppState extends State<SaveDeckToolkitApp>
 
   Widget _buildBackgroundProgress() {
     final status = BackgroundScrapeService.instance.status;
-    if (!status.running && status.total == 0) return const SizedBox.shrink();
+    if (status.total == 0) return const SizedBox.shrink();
+    if (!status.running && _hideCompletedBanner) return const SizedBox.shrink();
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
       child: GlassCard(

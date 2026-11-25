@@ -129,6 +129,44 @@ games = [{ name = "游戏A", file = "a.gba" }, { name = "游戏B", file = "b.gba
     expect(doc.games[1]['file'], 'b.gba');
   });
 
+  test('开发商、日期与附加资源字段可写入并读回', () {
+    final game = GameEntry(
+      name: '最终幻想',
+      file: 'ff.gba',
+      developer: 'Square',
+      releaseDate: '1994-04-02',
+      wheel: 'media/最终幻想/wheel.png',
+      boxTexture: 'media/最终幻想/box-texture.png',
+      box3D: 'media/最终幻想/box-3D.png',
+      support2D: 'media/最终幻想/support-2D.png',
+      fanart: 'media/最终幻想/fanart.jpg',
+      mixrbv: 'media/最终幻想/mixrbv.png',
+    );
+    final library = PlatformLibrary(
+      directory: '/tmp/GBA',
+      platform: 'GBA',
+      games: <GameEntry>[game],
+    );
+    final text = TomlService.serialize(library);
+
+    expect(text.contains('developpeur = "Square"'), true);
+    expect(text.contains('dates = "1994-04-02"'), true);
+    expect(text.contains('box-texture = "media/最终幻想/box-texture.png"'), true);
+    expect(text.contains('support-2D = "media/最终幻想/support-2D.png"'), true);
+
+    final reparsed = TomlService.parse(text).games.map(GameEntry.fromMap).single;
+    expect(reparsed.developer, 'Square');
+    expect(reparsed.releaseDate, '1994-04-02');
+    expect(reparsed.wheel, 'media/最终幻想/wheel.png');
+    expect(reparsed.boxTexture, 'media/最终幻想/box-texture.png');
+    expect(reparsed.box3D, 'media/最终幻想/box-3D.png');
+    expect(reparsed.support2D, 'media/最终幻想/support-2D.png');
+    expect(reparsed.fanart, 'media/最终幻想/fanart.jpg');
+    expect(reparsed.mixrbv, 'media/最终幻想/mixrbv.png');
+    // 已识别字段不应重复进入 extras。
+    expect(reparsed.extras.keys, isNot(contains('box-texture')));
+  });
+
   test('保留未知字段', () {
     const sample = '''
 platform = "GBA"

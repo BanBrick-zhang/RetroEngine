@@ -21,6 +21,28 @@ if (flutterVersionName == null) {
     flutterVersionName = '1.0'
 }
 
+// ---- ScreenScraper 开发者凭据构建注入 ----
+// 命令行已通过 --dart-define 提供时优先使用；否则从环境变量或 android/local.properties
+// 读取 SS_DEV_ID / SS_DEV_PASSWORD，按 Flutter 的编码格式写入 dart-defines 项目属性，
+// 由 Dart 编译器固化为 String.fromEnvironment 常量。凭据不进入源码与版本库。
+//
+// 用法：SS_DEV_ID=xxx SS_DEV_PASSWORD=yyy flutter build apk
+def ssDevId = (System.getenv('SS_DEV_ID') ?: localProperties.getProperty('SS_DEV_ID'))?.trim()
+def ssDevPassword =
+    (System.getenv('SS_DEV_PASSWORD') ?: localProperties.getProperty('SS_DEV_PASSWORD'))?.trim()
+if (!project.hasProperty('dart-defines') && ssDevId && ssDevPassword) {
+    def encodeDefine = { String key, String value ->
+        java.util.Base64.getUrlEncoder().encodeToString("$key=$value".getBytes('UTF-8'))
+    }
+    project.ext.set(
+        'dart-defines',
+        "${encodeDefine('SS_DEV_ID', ssDevId)},${encodeDefine('SS_DEV_PASSWORD', ssDevPassword)}"
+    )
+    logger.lifecycle('已注入 ScreenScraper 开发者凭据（SS_DEV_ID / SS_DEV_PASSWORD）。')
+} else if (!project.hasProperty('dart-defines') && (ssDevId || ssDevPassword)) {
+    logger.lifecycle('SS_DEV_ID 与 SS_DEV_PASSWORD 需成对提供，已跳过开发者凭据注入。')
+}
+
 apply plugin: 'com.android.application'
 apply plugin: 'kotlin-android'
 apply from: "$flutterRoot/packages/flutter_tools/gradle/flutter.gradle"

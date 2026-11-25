@@ -21,8 +21,6 @@ class _SettingsScreenState extends State<SettingsScreen>
     with WidgetsBindingObserver {
   final _userController = TextEditingController();
   final _passwordController = TextEditingController();
-  final _devIdController = TextEditingController();
-  final _devPasswordController = TextEditingController();
   final _translateKeyController = TextEditingController();
   String? _libraryPath;
   String? _language;
@@ -33,7 +31,6 @@ class _SettingsScreenState extends State<SettingsScreen>
   bool _renameRom = true;
   bool _renameMedia = true;
   bool _obscure = true;
-  bool _obscureDev = true;
   bool _testing = false;
   int _videoDelay = 2;
   String _version = '加载中…';
@@ -53,8 +50,6 @@ class _SettingsScreenState extends State<SettingsScreen>
     WidgetsBinding.instance.removeObserver(this);
     _userController.dispose();
     _passwordController.dispose();
-    _devIdController.dispose();
-    _devPasswordController.dispose();
     _translateKeyController.dispose();
     super.dispose();
   }
@@ -81,8 +76,6 @@ class _SettingsScreenState extends State<SettingsScreen>
     final path = await PreferencesService.libraryPath;
     final user = await PreferencesService.ssUsername;
     final password = await PreferencesService.ssPassword;
-    final devId = await PreferencesService.ssDevId;
-    final devPassword = await PreferencesService.ssDevPassword;
     final language = await PreferencesService.language;
     final cover = await PreferencesService.downloadCover;
     final video = await PreferencesService.downloadVideo;
@@ -98,11 +91,6 @@ class _SettingsScreenState extends State<SettingsScreen>
       _libraryPath = path;
       _userController.text = user ?? '';
       _passwordController.text = password ?? '';
-      _devIdController.text =
-          (devId == null || devId.isEmpty) ? ScreenscraperConfig.buildDevId : devId;
-      _devPasswordController.text = (devPassword == null || devPassword.isEmpty)
-          ? ScreenscraperConfig.buildDevPassword
-          : devPassword;
       _translateKeyController.text = translateKey ?? '';
       _language = language;
       _cover = cover;
@@ -191,44 +179,18 @@ class _SettingsScreenState extends State<SettingsScreen>
       title: 'ScreenScraper 账号',
       icon: Icons.account_circle_outlined,
       children: [
-        const Text(
-          '开发者凭据请自行向 ScreenScraper 申请后填写，构建时也可通过 '
-          '--dart-define=SS_DEV_ID / SS_DEV_PASSWORD 注入，源码中不再内置。',
-          style: TextStyle(color: AppTheme.textSecondary, fontSize: 11, height: 1.5),
+        Text(
+          ScreenscraperConfig.hasBuildCredentials
+              ? '开发者凭据已随安装包内置。以下为可选的个人账号，'
+                  '填写后可提升每日请求配额；留空则以匿名访客身份调用。'
+              : '当前安装包未内置开发者凭据，搜刮将不可用。请在构建时通过环境变量 '
+                  'SS_DEV_ID / SS_DEV_PASSWORD（写入 android/local.properties 亦可）或 '
+                  '--dart-define 注入后重新打包。\n\n'
+                  '用户账号为可选，填写后可提升每日请求配额。',
+          style: const TextStyle(
+              color: AppTheme.textSecondary, fontSize: 11, height: 1.5),
         ),
         const SizedBox(height: 12),
-        TextField(
-          controller: _devIdController,
-          style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
-          decoration: const InputDecoration(
-            labelText: '开发者 ID（devid）',
-            prefixIcon: Icon(Icons.badge_outlined,
-                size: 18, color: AppTheme.textSecondary),
-          ),
-        ),
-        const SizedBox(height: 10),
-        TextField(
-          controller: _devPasswordController,
-          obscureText: _obscureDev,
-          style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
-          decoration: InputDecoration(
-            labelText: '开发者密码（devpassword）',
-            prefixIcon: const Icon(Icons.key_outlined,
-                size: 18, color: AppTheme.textSecondary),
-            suffixIcon: IconButton(
-              icon: Icon(_obscureDev
-                  ? Icons.visibility_outlined
-                  : Icons.visibility_off_outlined),
-              onPressed: () => setState(() => _obscureDev = !_obscureDev),
-            ),
-          ),
-        ),
-        const SizedBox(height: 14),
-        const Text(
-          '以下为可选的个人账号，填写后可提升每日请求配额；留空则以匿名访客身份调用。',
-          style: TextStyle(color: AppTheme.textSecondary, fontSize: 11, height: 1.5),
-        ),
-        const SizedBox(height: 10),
         TextField(
           controller: _userController,
           style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
@@ -488,11 +450,9 @@ class _SettingsScreenState extends State<SettingsScreen>
   Future<void> _saveAccount() async {
     await PreferencesService.setSsUsername(_userController.text.trim());
     await PreferencesService.setSsPassword(_passwordController.text.trim());
-    await PreferencesService.setSsDevId(_devIdController.text.trim());
-    await PreferencesService.setSsDevPassword(_devPasswordController.text.trim());
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('凭据与账号已保存')),
+        const SnackBar(content: Text('账号已保存')),
       );
     }
   }
@@ -505,11 +465,9 @@ class _SettingsScreenState extends State<SettingsScreen>
   }
 
   Future<void> _testConnection() async {
-    // 开发者凭据优先使用设置页填写值，其次使用构建期注入值。
-    final devId = _devIdController.text.trim();
-    final devPassword = _devPasswordController.text.trim();
-    if (devId.isEmpty || devPassword.isEmpty) {
-      _showMessage('请先填写开发者 ID 与开发者密码');
+    // 开发者凭据在构建时注入，应用内不再提供填写入口。
+    if (!ScreenscraperConfig.hasBuildCredentials) {
+      _showMessage('当前安装包未内置开发者凭据，请重新打包后再测试连接');
       return;
     }
     setState(() => _testing = true);
@@ -517,8 +475,6 @@ class _SettingsScreenState extends State<SettingsScreen>
       username: _userController.text.trim(),
       password: _passwordController.text.trim(),
       preferredLanguage: _language ?? ScreenscraperConfig.defaultLanguage,
-      devId: devId,
-      devPassword: devPassword,
     );
     try {
       // 采用 ssuserInfos.php 做凭据校验（与 neostation-frontend 一致）。

@@ -14,12 +14,16 @@ import '../services/screenscraper_service.dart';
 import '../services/toml_service.dart';
 import '../services/translation_service.dart';
 import '../theme.dart';
+import '../widgets/translation_dialog.dart';
 
 class _ManualSearchResult {
   final String query;
   final ScrapeOptions options;
 
-  const _ManualSearchResult(this.query, this.options);
+  /// 通过「翻译」得到并用于搜索的英文名；搜刮前需确认是否应用于游戏名。
+  final String? translatedName;
+
+  const _ManualSearchResult(this.query, this.options, this.translatedName);
 }
 
 class GameDetailScreen extends StatefulWidget {
@@ -41,6 +45,14 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
   late final TextEditingController _video;
   late final TextEditingController _launch;
   late final TextEditingController _id;
+  late final TextEditingController _developer;
+  late final TextEditingController _releaseDate;
+  late final TextEditingController _wheel;
+  late final TextEditingController _boxTexture;
+  late final TextEditingController _box3D;
+  late final TextEditingController _support2D;
+  late final TextEditingController _fanart;
+  late final TextEditingController _mixrbv;
 
   bool _busy = false;
   String? _status;
@@ -59,13 +71,38 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
     _video = TextEditingController(text: widget.game.video ?? '');
     _launch = TextEditingController(text: widget.game.launch ?? '');
     _id = TextEditingController(text: widget.game.id ?? '');
+    _developer = TextEditingController(text: widget.game.developer ?? '');
+    _releaseDate = TextEditingController(text: widget.game.releaseDate ?? '');
+    _wheel = TextEditingController(text: widget.game.wheel ?? '');
+    _boxTexture = TextEditingController(text: widget.game.boxTexture ?? '');
+    _box3D = TextEditingController(text: widget.game.box3D ?? '');
+    _support2D = TextEditingController(text: widget.game.support2D ?? '');
+    _fanart = TextEditingController(text: widget.game.fanart ?? '');
+    _mixrbv = TextEditingController(text: widget.game.mixrbv ?? '');
     BackgroundScrapeService.instance.addListener(_onScrapeChanged);
   }
 
   @override
   void dispose() {
     BackgroundScrapeService.instance.removeListener(_onScrapeChanged);
-    for (final c in [_name, _file, _sort, _description, _cover, _video, _launch, _id]) {
+    for (final c in [
+      _name,
+      _file,
+      _sort,
+      _description,
+      _cover,
+      _video,
+      _launch,
+      _id,
+      _developer,
+      _releaseDate,
+      _wheel,
+      _boxTexture,
+      _box3D,
+      _support2D,
+      _fanart,
+      _mixrbv,
+    ]) {
       c.dispose();
     }
     super.dispose();
@@ -98,20 +135,17 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
     final username = await PreferencesService.ssUsername;
     final password = await PreferencesService.ssPassword;
     final language = await PreferencesService.language;
-    final devId = await PreferencesService.ssDevId;
-    final devPassword = await PreferencesService.ssDevPassword;
     return ScreenscraperService(
       username: username,
       password: password,
       preferredLanguage: language,
-      devId: devId,
-      devPassword: devPassword,
     );
   }
 
   Future<void> _scrape({
     required String manualQuery,
     ScrapeOptions? options,
+    String? translatedName,
   }) async {
     final romPath = p.join(widget.platform.directory, _file.text.trim());
     if (!await File(romPath).exists()) {
@@ -139,7 +173,7 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
         return;
       }
       // 搜索结果全部展示，由用户手动选择要使用的条目。
-      _showCandidates(candidates, options);
+      _showCandidates(candidates, options, translatedName);
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -153,11 +187,57 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
 
   String get _romPathHint => _file.text.trim().isEmpty ? '（未填写文件）' : _file.text.trim();
 
+  /// 搜刮前确认是否把翻译后的英文名写为游戏名称（默认不应用）。
+  Future<bool> _confirmTranslatedName({
+    required String translatedName,
+    required String currentName,
+  }) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: AppTheme.surface,
+        title: const Text('应用翻译后的名称？',
+            style: TextStyle(color: AppTheme.textPrimary, fontSize: 17)),
+        content: Text(
+          '搜索使用的英文名：$translatedName\n'
+          '当前游戏名称：$currentName\n\n'
+          '默认保留当前名称。',
+          style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('不应用'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('应用'),
+          ),
+        ],
+      ),
+    );
+    // 点击遮罩或返回键视为「不应用」。
+    return result ?? false;
+  }
+
   /// 选定候选后交给后台队列下载，本页不阻塞、不弹遮罩。
   Future<void> _apply(
     ScrapeCandidate candidate,
     ScrapeOptions? options,
+    String? translatedName,
   ) async {
+    final currentName = _currentGame().name;
+    var applyTranslatedName = false;
+    if (translatedName != null &&
+        translatedName.isNotEmpty &&
+        translatedName != currentName) {
+      applyTranslatedName = await _confirmTranslatedName(
+        translatedName: translatedName,
+        currentName: currentName,
+      );
+      if (!mounted) return;
+    }
+
     final cover =
         options?.downloadCover ?? await PreferencesService.downloadCover;
     final video =
@@ -175,6 +255,9 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
         downloadVideo: video,
         overwriteDescription: overwrite,
       ),
+      // 使用过翻译名但选择「不应用」时，保留原游戏名。
+      renameGame: translatedName == null || applyTranslatedName,
+      nameOverride: applyTranslatedName ? translatedName : null,
     );
     if (!mounted) return;
     setState(() {
@@ -187,6 +270,7 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
   void _showCandidates(
     List<ScrapeCandidate> candidates,
     ScrapeOptions? options,
+    String? translatedName,
   ) {
     // 仅用于辅助识别结果的译名缓存，不写入游戏库；保存前可在详情页修改。
     final translations = <String, String>{};
@@ -242,13 +326,31 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
                         iconSize: 18,
                         icon: const Icon(Icons.translate),
                         onPressed: () async {
+                          // 记住当前弹层路由，返回后据此判断弹层是否已被关闭。
+                          final route = ModalRoute.of(sheetContext);
+                          final messenger = ScaffoldMessenger.of(context);
                           try {
                             final text = await TranslationService.autoTranslate(
                                 item.name);
+                            if (route != null && !route.isCurrent) return;
+                            // ignore: use_build_context_synchronously
+                            final applied = await showTranslationResultDialog(
+                              sheetContext,
+                              original: item.name,
+                              translated: text,
+                              title: '翻译名称',
+                              directionLabel:
+                                  TranslationService.containsChinese(item.name)
+                                      ? '译文：英文'
+                                      : '译文：中文',
+                              maxLines: 2,
+                            );
+                            if (applied == null || applied.isEmpty) return;
+                            if (route != null && !route.isCurrent) return;
                             setSheetState(
-                                () => translations[item.gameId] = text);
+                                () => translations[item.gameId] = applied);
                           } catch (e) {
-                            ScaffoldMessenger.of(sheetContext).showSnackBar(
+                            messenger.showSnackBar(
                               SnackBar(content: Text('翻译失败：$e')),
                             );
                           }
@@ -256,7 +358,7 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
                       ),
                       onTap: () {
                         Navigator.pop(context);
-                        _apply(item, options);
+                        _apply(item, options, translatedName);
                       },
                     );
                   },
@@ -284,8 +386,28 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
       clearVideo: _video.text.trim().isEmpty,
       launch: _launch.text.trim().isEmpty ? null : _launch.text.trim(),
       clearLaunch: _launch.text.trim().isEmpty,
+      developer: _developer.text.trim().isEmpty ? null : _developer.text.trim(),
+      clearDeveloper: _developer.text.trim().isEmpty,
+      releaseDate:
+          _releaseDate.text.trim().isEmpty ? null : _releaseDate.text.trim(),
+      clearReleaseDate: _releaseDate.text.trim().isEmpty,
+      wheel: _emptyToNull(_wheel.text),
+      clearWheel: _wheel.text.trim().isEmpty,
+      boxTexture: _emptyToNull(_boxTexture.text),
+      clearBoxTexture: _boxTexture.text.trim().isEmpty,
+      box3D: _emptyToNull(_box3D.text),
+      clearBox3D: _box3D.text.trim().isEmpty,
+      support2D: _emptyToNull(_support2D.text),
+      clearSupport2D: _support2D.text.trim().isEmpty,
+      fanart: _emptyToNull(_fanart.text),
+      clearFanart: _fanart.text.trim().isEmpty,
+      mixrbv: _emptyToNull(_mixrbv.text),
+      clearMixrbv: _mixrbv.text.trim().isEmpty,
     );
   }
+
+  static String? _emptyToNull(String value) =>
+      value.trim().isEmpty ? null : value.trim();
 
   void _syncControllers(GameEntry game) {
     _name.text = game.name;
@@ -296,6 +418,14 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
     _video.text = game.video ?? '';
     _launch.text = game.launch ?? '';
     _id.text = game.id ?? '';
+    _developer.text = game.developer ?? '';
+    _releaseDate.text = game.releaseDate ?? '';
+    _wheel.text = game.wheel ?? '';
+    _boxTexture.text = game.boxTexture ?? '';
+    _box3D.text = game.box3D ?? '';
+    _support2D.text = game.support2D ?? '';
+    _fanart.text = game.fanart ?? '';
+    _mixrbv.text = game.mixrbv ?? '';
   }
 
   Future<void> _save() async {
@@ -321,6 +451,9 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
       }
     }
     if (index >= 0) widget.platform.games[index] = updated;
+    // 排序值改变后同步调整 [[games]] 在 TOML 中的先后位置，
+    // 让各平台前端的展示顺序与本页设置的排序一致。
+    LibraryService.reorderGamesBySort(widget.platform);
     await TomlService.save(widget.platform);
     if (mounted) Navigator.of(context).pop(true);
   }
@@ -355,6 +488,7 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
     var cover = true;
     var video = true;
     var description = true;
+    var resources = true;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
@@ -394,6 +528,17 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
                   dense: true,
                   contentPadding: EdgeInsets.zero,
                   activeColor: AppTheme.accent,
+                  title: const Text('其他图片资源（wheel/fanart 等）',
+                      style: TextStyle(
+                          color: AppTheme.textPrimary, fontSize: 13)),
+                  value: resources,
+                  onChanged: (v) =>
+                      setDialogState(() => resources = v ?? true),
+                ),
+                CheckboxListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  activeColor: AppTheme.accent,
                   title: const Text('游戏简介',
                       style: TextStyle(
                           color: AppTheme.textPrimary, fontSize: 13)),
@@ -416,17 +561,18 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
       ),
     );
     if (confirmed != true) return;
-    if (!cover && !video && !description) {
+    if (!cover && !video && !description && !resources) {
       _showMessage('请至少选择一项要删除的内容');
       return;
     }
 
-    if (cover || video) {
+    if (cover || video || resources) {
       await LibraryService.deleteMediaFiles(
         widget.platform,
         widget.game.name,
         cover: cover,
         video: video,
+        resources: resources,
       );
     }
     final index = widget.platform.games
@@ -437,6 +583,12 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
         clearCover: cover,
         clearVideo: video,
         clearDescription: description,
+        clearWheel: resources,
+        clearBoxTexture: resources,
+        clearBox3D: resources,
+        clearSupport2D: resources,
+        clearFanart: resources,
+        clearMixrbv: resources,
       );
       widget.platform.games[index] = updated;
     }
@@ -449,6 +601,18 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
       if (cover) _cover.clear();
       if (video) _video.clear();
       if (description) _description.clear();
+      if (resources) {
+        for (final c in [
+          _wheel,
+          _boxTexture,
+          _box3D,
+          _support2D,
+          _fanart,
+          _mixrbv,
+        ]) {
+          c.clear();
+        }
+      }
     }
     setState(() {});
     _showMessage('所选媒体内容已删除并保存到 savedeck.toml');
@@ -591,13 +755,32 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
                         icon: Icons.title_outlined,
                         trailing: _translateButton(
                           tooltip: '翻译名称（含中文译英，否则译中）',
-                          onPressed: _busy ? null : () => _translateField(_name),
+                          onPressed: _busy
+                              ? null
+                              : () => _translateField(_name,
+                                  title: '翻译名称', maxLines: 2),
                         ),
                       ),
                       _field('ROM 文件（相对路径）', _file, icon: Icons.folder_outlined),
                       _field('排序', _sort, icon: Icons.sort_outlined),
+                      _field('开发商（developpeur）', _developer,
+                          icon: Icons.business_outlined),
+                      _field('发售日期（dates）', _releaseDate,
+                          icon: Icons.event_outlined),
                       _field('封面路径', _cover, icon: Icons.image_outlined),
                       _field('视频路径', _video, icon: Icons.movie_outlined),
+                      _field('轮播图（wheel）', _wheel,
+                          icon: Icons.view_carousel_outlined),
+                      _field('整体包装（box-texture）', _boxTexture,
+                          icon: Icons.inventory_2_outlined),
+                      _field('3D 封面（box-3D）', _box3D,
+                          icon: Icons.view_in_ar_outlined),
+                      _field('游戏卡带（support-2D）', _support2D,
+                          icon: Icons.sd_card_outlined),
+                      _field('同人图（fanart）', _fanart,
+                          icon: Icons.palette_outlined),
+                      _field('全家福（mixrbv）', _mixrbv,
+                          icon: Icons.photo_library_outlined),
                       _field('启动指令', _launch, icon: Icons.terminal_outlined),
                       _field('ID（UUID）', _id, icon: Icons.fingerprint_outlined),
                     ],
@@ -615,7 +798,9 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
                           onPressed: _busy
                               ? null
                               : () => _translateField(_description,
-                                  forceChinese: true),
+                                  forceChinese: true,
+                                  title: '翻译简介',
+                                  maxLines: 10),
                         ),
                       ),
                       const SizedBox(height: 10),
@@ -744,12 +929,14 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
     );
   }
 
-  /// 翻译指定输入框的内容，结果直接写回输入框，用户可修改后再保存。
+  /// 翻译指定输入框的内容，结果以弹窗展示，用户确认并（可修改后）应用才写回。
   ///
   /// [forceChinese] 为 true 时始终译为中文（用于简介）；否则按内容自动判断方向。
   Future<void> _translateField(
     TextEditingController controller, {
     bool forceChinese = false,
+    String title = '翻译结果',
+    int maxLines = 3,
   }) async {
     final text = controller.text.trim();
     if (text.isEmpty) {
@@ -768,12 +955,23 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
           ? await TranslationService.toChinese(text)
           : await TranslationService.toEnglish(text);
       if (!mounted) return;
-      controller.text = translated;
       setState(() {
         _busy = false;
         _status = null;
       });
-      _showMessage('翻译完成，可修改后保存');
+
+      // 先预览再应用：取消则保留原文，应用则写入（可在弹窗内修改）。
+      final applied = await showTranslationResultDialog(
+        context,
+        original: text,
+        translated: translated,
+        title: title,
+        directionLabel: toChinese ? '译文：中文' : '译文：英文',
+        maxLines: maxLines,
+      );
+      if (!mounted || applied == null || applied.isEmpty) return;
+      controller.text = applied;
+      _showMessage('已应用翻译，可继续修改后保存');
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -791,6 +989,8 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
     var cover = true;
     var video = true;
     var description = true;
+    // 记录搜索框内容是否来自「翻译」，用于搜刮前询问是否应用译名。
+    String? translatedName;
 
     showDialog<_ManualSearchResult>(
       context: context,
@@ -819,19 +1019,37 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
                         : () async {
                             final text = controller.text.trim();
                             if (text.isEmpty) return;
+                            final route = ModalRoute.of(context);
                             setDialogState(() {
                               translating = true;
                               error = null;
                             });
                             try {
-                              // 翻译结果写回输入框，用户可修改后再搜索。
                               final translated =
                                   await TranslationService.autoTranslate(text);
-                              controller.text = translated;
+                              if (route != null && !route.isCurrent) return;
+                              // 弹窗确认（可修改）后再写回输入框。
+                              // ignore: use_build_context_synchronously
+                              final applied = await showTranslationResultDialog(
+                                context,
+                                original: text,
+                                translated: translated,
+                                title: '翻译搜索结果',
+                                directionLabel: TranslationService.containsChinese(text)
+                                    ? '译文：英文'
+                                    : '译文：中文',
+                                maxLines: 2,
+                              );
+                              if (applied != null && applied.isNotEmpty) {
+                                controller.text = applied;
+                                translatedName = applied;
+                              }
                             } catch (e) {
                               error = e.toString();
                             } finally {
-                              setDialogState(() => translating = false);
+                              if (route == null || route.isCurrent) {
+                                setDialogState(() => translating = false);
+                              }
                             }
                           },
                     icon: translating
@@ -903,6 +1121,11 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
                   setDialogState(() => error = '请至少选择一项要搜刮的内容');
                   return;
                 }
+                // 只有翻译出英文名时才在选定结果后询问是否应用为游戏名。
+                final translated = translatedName != null &&
+                        !TranslationService.containsChinese(query)
+                    ? query
+                    : null;
                 Navigator.pop(
                   dialogContext,
                   _ManualSearchResult(
@@ -912,6 +1135,7 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
                       downloadVideo: video,
                       overwriteDescription: description,
                     ),
+                    translated,
                   ),
                 );
               },
@@ -922,7 +1146,11 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
       ),
     ).then((value) {
       if (value != null && value.query.isNotEmpty) {
-        _scrape(manualQuery: value.query, options: value.options);
+        _scrape(
+          manualQuery: value.query,
+          options: value.options,
+          translatedName: value.translatedName,
+        );
       }
     });
   }

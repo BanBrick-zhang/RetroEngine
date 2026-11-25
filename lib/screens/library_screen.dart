@@ -221,23 +221,20 @@ class _LibraryScreenState extends State<LibraryScreen>
               icon: const Icon(Icons.add),
               label: const Text('添加 ROM'),
             ),
+      // 按键提示占用独立底栏，浮动按钮会自动排在其上方，避免互相遮挡。
+      bottomNavigationBar: _buildGamepadHint(),
       body: RawKeyboardListener(
         focusNode: _gamepadFocus,
         autofocus: true,
         onKey: _handleGamepadKey,
-        child: Stack(
-          children: [
-            AppTheme.backdrop(
-              child: _loading
-                  ? const Center(child: GlassLoader(message: '正在扫描游戏库…'))
-                  : _error != null
-                      ? _errorView()
-                      : _platforms.isEmpty
-                          ? _emptyView()
-                          : _libraryView(),
-            ),
-            _buildGamepadHint(),
-          ],
+        child: AppTheme.backdrop(
+          child: _loading
+              ? const Center(child: GlassLoader(message: '正在扫描游戏库…'))
+              : _error != null
+                  ? _errorView()
+                  : _platforms.isEmpty
+                      ? _emptyView()
+                      : _libraryView(),
         ),
       ),
     );
@@ -268,10 +265,9 @@ class _LibraryScreenState extends State<LibraryScreen>
           ),
         );
 
-    return Positioned(
-      left: 12,
-      right: 12,
-      bottom: 8,
+    return SafeArea(
+      top: false,
+      minimum: const EdgeInsets.fromLTRB(12, 2, 12, 8),
       child: IgnorePointer(
         child: Row(
           children: [
@@ -552,7 +548,7 @@ class _LibraryScreenState extends State<LibraryScreen>
                 )
               : GridView.builder(
                   padding: const EdgeInsets.fromLTRB(
-                      16, 4, 16, AppTheme.bottomNavClearance + 100),
+                      16, 4, 16, AppTheme.bottomNavClearance + 16),
                   gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                     crossAxisCount:
                         MediaQuery.of(context).orientation == Orientation.landscape

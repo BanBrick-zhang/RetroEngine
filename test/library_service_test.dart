@@ -192,6 +192,41 @@ video = "media/示例游戏/video.mp4"
     expect(Directory(p.join(dir.path, 'media', '刮削后的名字')).existsSync(), false);
   });
 
+  test('改名时按附加资源路径迁移媒体目录并修正所有引用', () async {
+    final dir = Directory(p.join(root.path, 'GBA'))..createSync(recursive: true);
+    File(p.join(dir.path, 'Game.gba')).writeAsStringSync('rom');
+    final media = Directory(p.join(dir.path, 'media', 'Old Game'))
+      ..createSync(recursive: true);
+    File(p.join(media.path, 'wheel.png')).writeAsBytesSync(<int>[1]);
+    File(p.join(media.path, 'fanart.jpg')).writeAsBytesSync(<int>[2]);
+
+    final platform = PlatformLibrary(directory: dir.path, platform: 'GBA');
+    final game = GameEntry(
+      name: 'Old Game',
+      file: 'Game.gba',
+      wheel: 'media/Old Game/wheel.png',
+      fanart: 'media/Old Game/fanart.jpg',
+    );
+
+    final updated = await LibraryService.syncGameName(
+      platform,
+      game,
+      'New Game',
+    );
+
+    expect(updated.wheel, 'media/New Game/wheel.png');
+    expect(updated.fanart, 'media/New Game/fanart.jpg');
+    expect(Directory(p.join(dir.path, 'media', 'New Game')).existsSync(), true);
+    expect(
+      Directory(p.join(dir.path, 'media', 'Old Game')).existsSync(),
+      false,
+    );
+    expect(
+      File(p.join(dir.path, 'media', 'New Game', 'fanart.jpg')).existsSync(),
+      true,
+    );
+  });
+
   test('cue 改名时同步重命名 bin 并修正引用', () async {
     final dir = Directory(p.join(root.path, 'PSX'))..createSync(recursive: true);
     File(p.join(dir.path, 'Old.cue'))
@@ -209,6 +244,45 @@ video = "media/示例游戏/video.mp4"
     expect(
       File(p.join(dir.path, 'New.cue')).readAsStringSync(),
       contains('"New.bin"'),
+    );
+  });
+
+  test('按 sort 字段重排游戏，无排序条目保持相对顺序并排在末尾', () {
+    final platform = PlatformLibrary(
+      directory: '/tmp/GBA',
+      platform: 'GBA',
+      games: [
+        GameEntry(name: 'B', file: 'b.gba', sort: '2'),
+        GameEntry(name: '无排序1', file: 'n1.gba'),
+        GameEntry(name: 'A', file: 'a.gba', sort: '10'),
+        GameEntry(name: 'C', file: 'c.gba', sort: '001'),
+        GameEntry(name: '无排序2', file: 'n2.gba'),
+      ],
+    );
+
+    LibraryService.reorderGamesBySort(platform);
+
+    expect(
+      platform.games.map((game) => game.name).toList(),
+      <String>['C', 'B', 'A', '无排序1', '无排序2'],
+    );
+  });
+
+  test('排序值相同（含补零写法）时保持原有先后顺序', () {
+    final platform = PlatformLibrary(
+      directory: '/tmp/GBA',
+      platform: 'GBA',
+      games: [
+        GameEntry(name: '前者', file: 'a.gba', sort: '1'),
+        GameEntry(name: '后者', file: 'b.gba', sort: '01'),
+      ],
+    );
+
+    LibraryService.reorderGamesBySort(platform);
+
+    expect(
+      platform.games.map((game) => game.name).toList(),
+      <String>['前者', '后者'],
     );
   });
 

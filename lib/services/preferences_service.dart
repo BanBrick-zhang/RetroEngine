@@ -5,8 +5,6 @@ class PreferencesService {
   static const _libraryPath = 'library_path';
   static const _ssUsername = 'ss_username';
   static const _ssPassword = 'ss_password';
-  static const _ssDevId = 'ss_devid';
-  static const _ssDevPassword = 'ss_devpassword';
   static const _language = 'preferred_language';
   static const _downloadCover = 'download_cover';
   static const _downloadVideo = 'download_video';
@@ -30,14 +28,6 @@ class PreferencesService {
   static Future<String?> get ssPassword async => (await _prefs).getString(_ssPassword);
   static Future<void> setSsPassword(String value) async =>
       (await _prefs).setString(_ssPassword, value);
-
-  static Future<String?> get ssDevId async => (await _prefs).getString(_ssDevId);
-  static Future<void> setSsDevId(String value) async =>
-      (await _prefs).setString(_ssDevId, value);
-
-  static Future<String?> get ssDevPassword async => (await _prefs).getString(_ssDevPassword);
-  static Future<void> setSsDevPassword(String value) async =>
-      (await _prefs).setString(_ssDevPassword, value);
 
   static Future<String> get language async =>
       (await _prefs).getString(_language) ?? 'en';

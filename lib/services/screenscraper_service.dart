@@ -11,21 +11,25 @@ import 'toml_service.dart';
 
 /// ScreenScraper 开发者凭据配置。
 ///
-/// 公开仓库不应硬编码真实凭据，凭据在**构建时**通过 `--dart-define` 注入：
+/// 公开仓库不应硬编码真实凭据，凭据在**构建时**注入，二选一：
 ///
 /// ```
+/// # 1. 环境变量（或写入 android/local.properties），直接 flutter build apk 即可
+/// SS_DEV_ID=<devid> SS_DEV_PASSWORD=<devpassword> flutter build apk
+///
+/// # 2. 命令行 --dart-define
 /// flutter build apk \
 ///   --dart-define=SS_DEV_ID=<devid> \
 ///   --dart-define=SS_DEV_PASSWORD=<devpassword>
 /// ```
 ///
-/// 也可在 CI 环境变量中配置。未注入时，用户需在「设置」中自行填写
-/// 开发者凭据（会持久化到本地），源码与版本库中不再包含任何真实凭据。
+/// 开发者凭据只能在构建期注入，应用内不提供填写入口；
+/// 源码与版本库中不包含任何真实凭据。
 class ScreenscraperConfig {
-  /// 构建期注入的开发者 ID（`--dart-define=SS_DEV_ID=...`）。
+  /// 构建期注入的开发者 ID（dart-define / 构建环境变量 `SS_DEV_ID`）。
   static const String buildDevId = String.fromEnvironment('SS_DEV_ID');
 
-  /// 构建期注入的开发者密码（`--dart-define=SS_DEV_PASSWORD=...`）。
+  /// 构建期注入的开发者密码（dart-define / 构建环境变量 `SS_DEV_PASSWORD`）。
   static const String buildDevPassword =
       String.fromEnvironment('SS_DEV_PASSWORD');
 
@@ -39,7 +43,7 @@ class ScreenscraperConfig {
 
 /// ScreenScraper.fr API v2 客户端。
 ///
-/// 开发者凭据优先使用调用方传入值（「设置」中保存），其次使用构建期注入值；
+/// 开发者凭据使用构建期注入值（调用方传入值仅供测试覆盖）；
 /// 用户账号为可选（填写后可提升配额），未配置时以匿名访客身份调用。
 class ScreenscraperService {
   static const String host = 'api.screenscraper.fr';
@@ -66,9 +70,9 @@ class ScreenscraperService {
             : devPassword {
     if (!hasDevCredentials) {
       throw const SsException(
-        '尚未配置 ScreenScraper 开发者凭据。\n'
-        '请在「设置 → ScreenScraper 开发者凭据」中填写 devid / devpassword，'
-        '或在构建时通过 --dart-define=SS_DEV_ID / SS_DEV_PASSWORD 注入。',
+        '当前安装包未内置 ScreenScraper 开发者凭据。\n'
+        '请在构建时通过环境变量（SS_DEV_ID / SS_DEV_PASSWORD，可写入 '
+        'android/local.properties）或 --dart-define 注入后重新打包。',
       );
     }
   }
@@ -151,7 +155,7 @@ class ScreenscraperService {
     if (status == 403 || status == 401) {
       throw const SsException(
         'ScreenScraper 拒绝访问（HTTP 403/401）：开发者凭据或用户账号无效。'
-        '请检查「设置」中的开发者凭据与账号信息后重试。',
+        '开发者凭据在构建时注入，请确认打包配置；用户账号可在设置中检查。',
       );
     }
     if (status == 423) {
@@ -177,7 +181,7 @@ class ScreenscraperService {
         throw SsException(
           'ScreenScraper 开发者凭据无效（devid/devpassword）：$raw\n'
           '请确认该开发者账号已在 ScreenScraper 后台激活，'
-          '并在「设置」中更新凭据后重试。',
+          '并检查构建时注入的凭据后重新打包。',
         );
       }
       if (raw.contains('identifiants utilisateurs') ||
@@ -231,7 +235,7 @@ class ScreenscraperService {
     if (response.statusCode == 403) {
       throw const SsException(
         '凭据校验失败：请确认用户名为 ScreenScraper 账号用户名（非邮箱），'
-        '并检查「设置」中的开发者凭据是否有效。',
+        '并检查用户密码；开发者凭据由构建时注入。',
       );
     }
     if (response.statusCode != 200) {
@@ -295,7 +299,11 @@ class ScreenscraperService {
       if (item is! Map) continue;
       final map = Map<String, dynamic>.from(item);
       if ((map['id']?.toString() ?? '').isEmpty) continue;
-      results.add(_candidateFromDetail(map, fallbackName: query.trim()));
+      results.add(_candidateFromDetail(
+        map,
+        fallbackName: query.trim(),
+        detailed: false,
+      ));
     }
     return results;
   }
@@ -355,8 +363,45 @@ class ScreenscraperService {
     return results;
   }
 
+  /// 视频优先使用归一化（`video-normalized`）版本，其次才回退到原始 `video`。
+  static const List<String> preferredVideoTypes = <String>[
+    'video-normalized',
+    'video',
+  ];
+
+  /// 附加媒体资源：TOML 标签 -> 候选 ScreenScraper 媒体类型（按优先级）。
+  static const Map<String, List<String>> resourceMediaTypes =
+      <String, List<String>>{
+    'wheel': <String>['wheel', 'wheel-hd'],
+    'box-texture': <String>['box-texture', 'box-2D-texture'],
+    'box-3D': <String>['box-3D'],
+    'support-2D': <String>['support-2D'],
+    'fanart': <String>['fanart'],
+    'mixrbv': <String>['mixrbv', 'mixrbv2', 'mixrbv1'],
+  };
+
+  /// 资源下载时展示给用户的中文名称。
+  static const Map<String, String> resourceLabels = <String, String>{
+    'wheel': '轮播图',
+    'box-texture': '整体包装',
+    'box-3D': '3D 封面',
+    'support-2D': '游戏卡带',
+    'fanart': '同人图',
+    'mixrbv': '全家福',
+  };
+
+  static const List<String> _imageExtensions = <String>[
+    'png',
+    'jpg',
+    'jpeg',
+    'webp',
+    'gif',
+  ];
+
   /// 执行搜刮并把媒体写入 SaveDeck 游戏库，更新 [[games]] 条目。
   ///
+  /// [renameGame] 为 false 时保留现有游戏名（手动搜刮选择「不应用翻译名」）；
+  /// [nameOverride] 非空时用它代替 ScreenScraper 返回的名称。
   /// [onProgress] 用于汇报阶段文本。
   Future<GameEntry> applyCandidate({
     required PlatformLibrary platform,
@@ -366,23 +411,40 @@ class ScreenscraperService {
     bool downloadCover = true,
     bool downloadVideo = true,
     bool overwriteDescription = true,
+    bool renameGame = true,
+    String? nameOverride,
     void Function(String message)? onProgress,
     void Function(int received, int? total)? onDownloadProgress,
   }) async {
     var detail = candidate;
-    if (candidate.coverUrl == null &&
+    final lacksAllMedia = candidate.coverUrl == null &&
         candidate.videoUrl == null &&
-        candidate.description == null) {
+        candidate.description == null;
+    // 搜索接口只返回部分字段；开发商、发售日期和附加资源来自完整详情。
+    // 补拉详情同时可确保视频使用归一化（video-normalized）版本。
+    if (!candidate.detailed || lacksAllMedia) {
       onProgress?.call('正在获取游戏详情…');
-      final fetched = await fetchByGameId(candidate.gameId, systemId: systemId);
-      if (fetched == null) {
+      ScrapeCandidate? fetched;
+      try {
+        fetched = await fetchByGameId(candidate.gameId, systemId: systemId);
+      } catch (_) {
+        if (lacksAllMedia) rethrow;
+      }
+      if (fetched != null) {
+        detail = fetched;
+      } else if (lacksAllMedia) {
         throw const SsException('未能获取游戏详情，请换一个搜索结果重试');
       }
-      detail = fetched;
     }
 
     final oldName = game.name;
-    final newName = detail.name.isNotEmpty ? detail.name : oldName;
+    final overrideName = nameOverride?.trim() ?? '';
+    final scrapedName = detail.name.isNotEmpty
+        ? detail.name
+        : (candidate.name.isNotEmpty ? candidate.name : oldName);
+    final newName = !renameGame
+        ? oldName
+        : (overrideName.isNotEmpty ? overrideName : scrapedName);
 
     // 名称变化时一次性迁移媒体目录并修正 TOML 路径（搜刮不改 ROM 文件名）。
     if (newName != oldName) {
@@ -410,7 +472,7 @@ class ScreenscraperService {
         onProgress: onDownloadProgress,
       );
       cover = LibraryService.mediaRelativePath(newName, p.basename(file.path));
-      for (final oldExt in const <String>['png', 'jpg', 'webp']) {
+      for (final oldExt in _imageExtensions) {
         if (oldExt == ext) continue;
         final old = File(p.join(mediaDir.path, 'cover.$oldExt'));
         if (await old.exists()) await old.delete();
@@ -438,18 +500,68 @@ class ScreenscraperService {
       }
     }
 
+    // 附加资源：文件名即 TOML 标签（wheel.png、box-texture.png 等）。
+    final resourcePaths = <String, String?>{
+      for (final tag in GameEntry.resourceTags) tag: game.resourcePath(tag),
+    };
+    for (final tag in GameEntry.resourceTags) {
+      final media = detail.resources[tag];
+      if (media == null || media.url.isEmpty) continue;
+      final label = resourceLabels[tag] ?? tag;
+      onProgress?.call('正在下载$label…');
+      final ext = _mediaExtension(media.format, 'png');
+      final file = File(p.join(mediaDir.path, '$tag.$ext'));
+      try {
+        await LibraryService.downloadStream(
+          media.url,
+          file.path,
+          onProgress: onDownloadProgress,
+        );
+        resourcePaths[tag] =
+            LibraryService.mediaRelativePath(newName, p.basename(file.path));
+        for (final oldExt in _imageExtensions) {
+          if (oldExt == ext) continue;
+          final old = File(p.join(mediaDir.path, '$tag.$oldExt'));
+          if (await old.exists()) await old.delete();
+        }
+      } catch (_) {
+        onProgress?.call('$label下载失败，已跳过');
+      }
+    }
+
     if (overwriteDescription && detail.description != null && detail.description!.isNotEmpty) {
       description = detail.description;
     }
+
+    final developer = (detail.developer?.trim().isNotEmpty ?? false)
+        ? detail.developer!.trim()
+        : game.developer;
+    final releaseDate = (detail.releaseDate?.trim().isNotEmpty ?? false)
+        ? detail.releaseDate!.trim()
+        : game.releaseDate;
 
     final updated = game.copyWith(
       name: newName,
       description: description,
       cover: cover,
       video: video,
+      developer: developer,
+      releaseDate: releaseDate,
+      wheel: resourcePaths['wheel'],
+      boxTexture: resourcePaths['box-texture'],
+      box3D: resourcePaths['box-3D'],
+      support2D: resourcePaths['support-2D'],
+      fanart: resourcePaths['fanart'],
+      mixrbv: resourcePaths['mixrbv'],
       clearDescription: description == null,
       clearCover: cover == null,
       clearVideo: video == null,
+      clearWheel: resourcePaths['wheel'] == null,
+      clearBoxTexture: resourcePaths['box-texture'] == null,
+      clearBox3D: resourcePaths['box-3D'] == null,
+      clearSupport2D: resourcePaths['support-2D'] == null,
+      clearFanart: resourcePaths['fanart'] == null,
+      clearMixrbv: resourcePaths['mixrbv'] == null,
     );
 
     final index = platform.games.indexWhere((g) => g.file == game.file);
@@ -505,13 +617,27 @@ class ScreenscraperService {
   ScrapeCandidate _candidateFromDetail(
     Map<dynamic, dynamic> jeu, {
     String fallbackName = '',
+    bool detailed = true,
   }) {
     final name = _pickName(jeu['noms'], preferredLanguage) ??
         _mapValue(jeu['name'], 'text') ??
         fallbackName;
     final medias = (jeu['medias'] as List?) ?? const <dynamic>[];
     final cover = pickMedia(medias, const <String>['box-2D', 'box-3D']);
-    final video = pickMedia(medias, const <String>['video-normalized', 'video']);
+    final video = pickMedia(medias, preferredVideoTypes);
+
+    final resources = <String, ScrapeMedia>{};
+    for (final entry in resourceMediaTypes.entries) {
+      final media = pickMedia(medias, entry.value);
+      if (media == null) continue;
+      final url = media['url']?.toString() ?? '';
+      if (url.isEmpty) continue;
+      resources[entry.key] = ScrapeMedia(
+        url: url,
+        format: media['format']?.toString() ?? '',
+        type: media['type']?.toString() ?? '',
+      );
+    }
 
     return ScrapeCandidate(
       gameId: jeu['id']?.toString() ?? '',
@@ -521,9 +647,62 @@ class ScreenscraperService {
       coverFormat: cover?['format']?.toString(),
       videoUrl: video?['url']?.toString(),
       videoFormat: video?['format']?.toString(),
+      videoType: video?['type']?.toString(),
       region: _firstRegion(jeu['noms']),
       systemName: _mapValue(jeu['systeme'], 'text'),
+      developer: _scalarText(jeu['developpeur']),
+      releaseDate: pickReleaseDate(jeu['dates']),
+      resources: resources,
+      detailed: detailed,
     );
+  }
+
+  /// 从 `dates` 数组选取发售日期：jp 优先，其次 us，最后取第一个非空值。
+  static String? pickReleaseDate(dynamic value) {
+    if (value == null) return null;
+    if (value is String) {
+      final text = value.trim();
+      return text.isEmpty ? null : text;
+    }
+    if (value is Map) {
+      final text = value['text']?.toString().trim() ?? '';
+      return text.isEmpty ? null : text;
+    }
+    if (value is List) {
+      final items = value.whereType<Map>().toList();
+      for (final region in const <String>['jp', 'us']) {
+        for (final item in items) {
+          if ((item['region']?.toString() ?? '').toLowerCase() == region) {
+            final text = item['text']?.toString().trim() ?? '';
+            if (text.isNotEmpty) return text;
+          }
+        }
+      }
+      for (final item in items) {
+        final text = item['text']?.toString().trim() ?? '';
+        if (text.isNotEmpty) return text;
+      }
+    }
+    return null;
+  }
+
+  /// 提取可能是字符串、`{text: ...}` 或数组的简单文本字段。
+  static String? _scalarText(dynamic value) {
+    if (value == null) return null;
+    if (value is String) {
+      final text = value.trim();
+      return text.isEmpty ? null : text;
+    }
+    if (value is Map) return _scalarText(value['text']);
+    if (value is List) {
+      for (final item in value) {
+        final text = _scalarText(item);
+        if (text != null) return text;
+      }
+      return null;
+    }
+    final text = value.toString().trim();
+    return text.isEmpty ? null : text;
   }
 
   /// 从媒体列表中选择最合适的项。

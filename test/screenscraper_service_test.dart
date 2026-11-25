@@ -151,4 +151,141 @@ void main() {
       expect(picked?['url'], 'https://example.com/front.png');
     });
   });
+
+  group('发售日期优先 jp、us', () {
+    test('同时存在多区域时优先 jp', () {
+      expect(
+        ScreenscraperService.pickReleaseDate(<dynamic>[
+          <String, dynamic>{'region': 'eu', 'text': '1994-04-02'},
+          <String, dynamic>{'region': 'us', 'text': '1994-10-01'},
+          <String, dynamic>{'region': 'jp', 'text': '1994-04-02'},
+        ]),
+        '1994-04-02',
+      );
+    });
+
+    test('没有 jp 时选 us', () {
+      expect(
+        ScreenscraperService.pickReleaseDate(<dynamic>[
+          <String, dynamic>{'region': 'eu', 'text': '1994-04-02'},
+          <String, dynamic>{'region': 'us', 'text': '1994-10-01'},
+        ]),
+        '1994-10-01',
+      );
+    });
+
+    test('jp/us 都缺失时回退第一个非空日期', () {
+      expect(
+        ScreenscraperService.pickReleaseDate(<dynamic>[
+          <String, dynamic>{'region': 'eu', 'text': ''},
+          <String, dynamic>{'region': 'kr', 'text': '1995-01-01'},
+        ]),
+        '1995-01-01',
+      );
+    });
+  });
+
+  group('附加媒体类型映射', () {
+    test('整体包装兼容 box-2D-texture 写法', () {
+      final types = ScreenscraperService.resourceMediaTypes['box-texture']!;
+      final picked = ScreenscraperService.pickMedia(
+        <dynamic>[
+          <String, dynamic>{
+            'type': 'box-2D-texture',
+            'region': 'wor',
+            'url': 'https://example.com/box-texture.png',
+          },
+        ],
+        types,
+      );
+      expect(picked?['url'], 'https://example.com/box-texture.png');
+    });
+
+    test('全家福按 mixrbv -> mixrbv2 -> mixrbv1 优先级选取', () {
+      final types = ScreenscraperService.resourceMediaTypes['mixrbv']!;
+      final picked = ScreenscraperService.pickMedia(
+        <dynamic>[
+          <String, dynamic>{
+            'type': 'mixrbv1',
+            'region': 'wor',
+            'url': 'https://example.com/mix1.png',
+          },
+          <String, dynamic>{
+            'type': 'mixrbv2',
+            'region': 'wor',
+            'url': 'https://example.com/mix2.png',
+          },
+        ],
+        types,
+      );
+      expect(picked?['url'], 'https://example.com/mix2.png');
+    });
+
+    test('每个标签都有对应的 ScreenScraper 媒体类型', () {
+      for (final tag in const <String>[
+        'wheel',
+        'box-texture',
+        'box-3D',
+        'support-2D',
+        'fanart',
+        'mixrbv',
+      ]) {
+        expect(ScreenscraperService.resourceMediaTypes[tag], isNotEmpty);
+      }
+    });
+  });
+
+  group('视频默认选用归一化版本', () {
+    test('同时存在 video 与 video-normalized 时选 video-normalized', () {
+      final picked = ScreenscraperService.pickMedia(
+        <dynamic>[
+          <String, dynamic>{
+            'type': 'video',
+            'region': 'wor',
+            'url': 'https://example.com/video.mp4',
+          },
+          <String, dynamic>{
+            'type': 'video-normalized',
+            'region': 'wor',
+            'url': 'https://example.com/video-normalized.mp4',
+          },
+        ],
+        ScreenscraperService.preferredVideoTypes,
+      );
+      expect(picked?['url'], 'https://example.com/video-normalized.mp4');
+    });
+
+    test('没有归一化视频时回退到 video', () {
+      final picked = ScreenscraperService.pickMedia(
+        <dynamic>[
+          <String, dynamic>{
+            'type': 'video',
+            'region': 'wor',
+            'url': 'https://example.com/video.mp4',
+          },
+        ],
+        ScreenscraperService.preferredVideoTypes,
+      );
+      expect(picked?['url'], 'https://example.com/video.mp4');
+    });
+
+    test('类型大小写/下划线写法归一化后仍优先命中', () {
+      final picked = ScreenscraperService.pickMedia(
+        <dynamic>[
+          <String, dynamic>{
+            'type': 'video',
+            'region': 'wor',
+            'url': 'https://example.com/video.mp4',
+          },
+          <String, dynamic>{
+            'type': 'VIDEO_NORMALIZED',
+            'region': 'wor',
+            'url': 'https://example.com/video-normalized.mp4',
+          },
+        ],
+        ScreenscraperService.preferredVideoTypes,
+      );
+      expect(picked?['url'], 'https://example.com/video-normalized.mp4');
+    });
+  });
 }

@@ -13,8 +13,51 @@ class GameEntry {
   String? video;
   String? launch;
 
+  /// 开发商（ScreenScraper `developpeur`）。
+  String? developer;
+
+  /// 发售日期（ScreenScraper `dates`，优先 jp、us）。
+  String? releaseDate;
+
+  /// 以下为 ScreenScraper 附加媒体资源，路径形如 `media/<游戏>/<标签>.png`。
+  String? wheel;
+  String? boxTexture; // box-texture
+  String? box3D; // box-3D
+  String? support2D; // support-2D
+  String? fanart;
+  String? mixrbv;
+
   /// 保留配置中出现的其他字段，避免回写时丢失。
   Map<String, dynamic> extras;
+
+  /// 附加媒体资源标签（同时用于 TOML 键与文件名）。
+  static const List<String> resourceTags = <String>[
+    'wheel',
+    'box-texture',
+    'box-3D',
+    'support-2D',
+    'fanart',
+    'mixrbv',
+  ];
+
+  /// 按标签读取媒体路径。
+  String? resourcePath(String tag) {
+    switch (tag) {
+      case 'wheel':
+        return wheel;
+      case 'box-texture':
+        return boxTexture;
+      case 'box-3D':
+        return box3D;
+      case 'support-2D':
+        return support2D;
+      case 'fanart':
+        return fanart;
+      case 'mixrbv':
+        return mixrbv;
+    }
+    return null;
+  }
 
   GameEntry({
     required this.name,
@@ -25,6 +68,14 @@ class GameEntry {
     this.cover,
     this.video,
     this.launch,
+    this.developer,
+    this.releaseDate,
+    this.wheel,
+    this.boxTexture,
+    this.box3D,
+    this.support2D,
+    this.fanart,
+    this.mixrbv,
     Map<String, dynamic>? extras,
   }) : extras = extras ?? <String, dynamic>{};
 
@@ -47,6 +98,14 @@ class GameEntry {
       cover: opt('cover'),
       video: opt('video'),
       launch: opt('launch'),
+      developer: opt('developpeur'),
+      releaseDate: opt('dates'),
+      wheel: opt('wheel'),
+      boxTexture: opt('box-texture'),
+      box3D: opt('box-3D'),
+      support2D: opt('support-2D'),
+      fanart: opt('fanart'),
+      mixrbv: opt('mixrbv'),
       extras: extras,
     );
   }
@@ -60,6 +119,14 @@ class GameEntry {
     'cover',
     'video',
     'launch',
+    'developpeur',
+    'dates',
+    'wheel',
+    'box-texture',
+    'box-3D',
+    'support-2D',
+    'fanart',
+    'mixrbv',
   };
 
   Map<String, dynamic> toMap() {
@@ -72,6 +139,22 @@ class GameEntry {
     if (cover != null && cover!.isNotEmpty) map['cover'] = cover;
     if (video != null && video!.isNotEmpty) map['video'] = video;
     if (launch != null && launch!.isNotEmpty) map['launch'] = launch;
+    if (developer != null && developer!.isNotEmpty) {
+      map['developpeur'] = developer;
+    }
+    if (releaseDate != null && releaseDate!.isNotEmpty) {
+      map['dates'] = releaseDate;
+    }
+    if (wheel != null && wheel!.isNotEmpty) map['wheel'] = wheel;
+    if (boxTexture != null && boxTexture!.isNotEmpty) {
+      map['box-texture'] = boxTexture;
+    }
+    if (box3D != null && box3D!.isNotEmpty) map['box-3D'] = box3D;
+    if (support2D != null && support2D!.isNotEmpty) {
+      map['support-2D'] = support2D;
+    }
+    if (fanart != null && fanart!.isNotEmpty) map['fanart'] = fanart;
+    if (mixrbv != null && mixrbv!.isNotEmpty) map['mixrbv'] = mixrbv;
     map.addAll(extras);
     return map;
   }
@@ -85,11 +168,27 @@ class GameEntry {
     String? cover,
     String? video,
     String? launch,
+    String? developer,
+    String? releaseDate,
+    String? wheel,
+    String? boxTexture,
+    String? box3D,
+    String? support2D,
+    String? fanart,
+    String? mixrbv,
     bool clearSort = false,
     bool clearDescription = false,
     bool clearCover = false,
     bool clearVideo = false,
     bool clearLaunch = false,
+    bool clearDeveloper = false,
+    bool clearReleaseDate = false,
+    bool clearWheel = false,
+    bool clearBoxTexture = false,
+    bool clearBox3D = false,
+    bool clearSupport2D = false,
+    bool clearFanart = false,
+    bool clearMixrbv = false,
   }) {
     return GameEntry(
       name: name ?? this.name,
@@ -100,9 +199,26 @@ class GameEntry {
       cover: clearCover ? null : (cover ?? this.cover),
       video: clearVideo ? null : (video ?? this.video),
       launch: clearLaunch ? null : (launch ?? this.launch),
+      developer: clearDeveloper ? null : (developer ?? this.developer),
+      releaseDate: clearReleaseDate ? null : (releaseDate ?? this.releaseDate),
+      wheel: clearWheel ? null : (wheel ?? this.wheel),
+      boxTexture: clearBoxTexture ? null : (boxTexture ?? this.boxTexture),
+      box3D: clearBox3D ? null : (box3D ?? this.box3D),
+      support2D: clearSupport2D ? null : (support2D ?? this.support2D),
+      fanart: clearFanart ? null : (fanart ?? this.fanart),
+      mixrbv: clearMixrbv ? null : (mixrbv ?? this.mixrbv),
       extras: Map<String, dynamic>.from(extras),
     );
   }
+}
+
+/// ScreenScraper 的一件媒体资源（URL + 格式 + 原始类型）。
+class ScrapeMedia {
+  final String url;
+  final String format;
+  final String type;
+
+  const ScrapeMedia({required this.url, this.format = '', this.type = ''});
 }
 
 /// 一个平台目录及其 savedeck.toml 配置。
@@ -173,8 +289,23 @@ class ScrapeCandidate {
   final String? coverFormat;
   final String? videoUrl;
   final String? videoFormat;
+
+  /// 视频媒体类型（如 `video-normalized`、`video`），用于判断是否需要重新获取详情。
+  final String? videoType;
   final String? region;
   final String? systemName;
+
+  /// 开发商（`developpeur`）。
+  final String? developer;
+
+  /// 发售日期（`dates`，优先 jp、us）。
+  final String? releaseDate;
+
+  /// 附加媒体资源，键为 TOML 标签（wheel、box-texture 等）。
+  final Map<String, ScrapeMedia> resources;
+
+  /// 是否来自 `jeuInfos.php` 完整详情。搜索接口字段有限，需要补拉详情。
+  final bool detailed;
 
   const ScrapeCandidate({
     required this.gameId,
@@ -184,9 +315,38 @@ class ScrapeCandidate {
     this.coverFormat,
     this.videoUrl,
     this.videoFormat,
+    this.videoType,
     this.region,
     this.systemName,
+    this.developer,
+    this.releaseDate,
+    this.resources = const <String, ScrapeMedia>{},
+    this.detailed = false,
   });
+
+  /// 仅替换视频字段，保留其余候选信息（用于用详情里的归一化视频覆盖搜索结果）。
+  ScrapeCandidate copyWithVideo({
+    String? videoUrl,
+    String? videoFormat,
+    String? videoType,
+  }) {
+    return ScrapeCandidate(
+      gameId: gameId,
+      name: name,
+      description: description,
+      coverUrl: coverUrl,
+      coverFormat: coverFormat,
+      videoUrl: videoUrl ?? this.videoUrl,
+      videoFormat: videoFormat ?? this.videoFormat,
+      videoType: videoType ?? this.videoType,
+      region: region,
+      systemName: systemName,
+      developer: developer,
+      releaseDate: releaseDate,
+      resources: resources,
+      detailed: detailed,
+    );
+  }
 }
 
 /// 平台信息：显示名、别名、ScreenScraper 系统 ID 与常见 ROM 扩展名。

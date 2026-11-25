@@ -2,7 +2,7 @@ name: savedeck_toolkit
 description: "SaveDeck 游戏库管理与 ScreenScraper 搜刮工具"
 publish_to: "none"
 
-version: 0.0.6+6
+version: 0.0.7+7
 
 environment:
   sdk: ">=2.17.0-0 <3.0.0"

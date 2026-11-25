@@ -17,12 +17,20 @@ class ScrapeJob {
   final int? systemId;
   final ScrapeOptions options;
 
+  /// 是否用搜刮结果更新游戏名（手动搜索「不应用翻译名」时为 false）。
+  final bool renameGame;
+
+  /// 指定写入的游戏名（应用翻译后的英文名时使用）。
+  final String? nameOverride;
+
   const ScrapeJob({
     required this.platform,
     required this.game,
     this.candidate,
     this.systemId,
     this.options = const ScrapeOptions(),
+    this.renameGame = true,
+    this.nameOverride,
   });
 
   /// 跨页面稳定标识，用于展示每个游戏的进度。
@@ -104,6 +112,8 @@ class BackgroundScrapeService extends ChangeNotifier {
                   candidate: job.candidate,
                   systemId: job.systemId,
                   options: options,
+                  renameGame: job.renameGame,
+                  nameOverride: job.nameOverride,
                 ))
             .toList();
     _queue.addAll(effective);
@@ -123,6 +133,8 @@ class BackgroundScrapeService extends ChangeNotifier {
     required ScrapeCandidate candidate,
     required ScrapeOptions options,
     int? systemId,
+    bool renameGame = true,
+    String? nameOverride,
   }) {
     enqueue(<ScrapeJob>[
       ScrapeJob(
@@ -131,6 +143,8 @@ class BackgroundScrapeService extends ChangeNotifier {
         candidate: candidate,
         systemId: systemId,
         options: options,
+        renameGame: renameGame,
+        nameOverride: nameOverride,
       ),
     ]);
   }
@@ -157,8 +171,6 @@ class BackgroundScrapeService extends ChangeNotifier {
     final username = await PreferencesService.ssUsername;
     final password = await PreferencesService.ssPassword;
     final language = await PreferencesService.language;
-    final devId = await PreferencesService.ssDevId;
-    final devPassword = await PreferencesService.ssDevPassword;
 
     final ScreenscraperService service;
     try {
@@ -166,8 +178,6 @@ class BackgroundScrapeService extends ChangeNotifier {
         username: username,
         password: password,
         preferredLanguage: language,
-        devId: devId,
-        devPassword: devPassword,
       );
     } catch (e) {
       // 缺少开发者凭据等致命配置错误：一次性失败掉所有排队任务。
@@ -216,6 +226,8 @@ class BackgroundScrapeService extends ChangeNotifier {
             downloadCover: job.options.downloadCover,
             downloadVideo: job.options.downloadVideo,
             overwriteDescription: job.options.overwriteDescription,
+            renameGame: job.renameGame,
+            nameOverride: job.nameOverride,
             onProgress: onProgress,
             onDownloadProgress: onDownloadProgress,
           );

@@ -203,6 +203,14 @@ class TomlService {
         _writeField(buffer, 'description', map['description'], skipNull: true);
         _writeField(buffer, 'cover', map['cover'], skipNull: true);
         _writeField(buffer, 'video', map['video'], skipNull: true);
+        _writeField(buffer, 'developpeur', map['developpeur'], skipNull: true);
+        _writeField(buffer, 'dates', map['dates'], skipNull: true);
+        _writeField(buffer, 'wheel', map['wheel'], skipNull: true);
+        _writeField(buffer, 'box-texture', map['box-texture'], skipNull: true);
+        _writeField(buffer, 'box-3D', map['box-3D'], skipNull: true);
+        _writeField(buffer, 'support-2D', map['support-2D'], skipNull: true);
+        _writeField(buffer, 'fanart', map['fanart'], skipNull: true);
+        _writeField(buffer, 'mixrbv', map['mixrbv'], skipNull: true);
         _writeField(buffer, 'launch', map['launch'], skipNull: true);
         for (final entry in game.extras.entries) {
           if (entry.value == null) continue;

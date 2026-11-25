@@ -322,6 +322,47 @@ class LibraryService {
     );
   }
 
+  static final RegExp _leadingNumber = RegExp(r'^[+-]?\d+');
+
+  /// 比较两个游戏排序值。
+  ///
+  /// 数字（含 "001" 这类补零写法）按数值比较，避免 "10" 排在 "2" 前面；
+  /// 数值相同的条目视为相等（保持原有先后顺序），非数字排序值排在数字之后，
+  /// 空值排最后。
+  static int compareSortValues(String? a, String? b) {
+    final left = (a ?? '').trim();
+    final right = (b ?? '').trim();
+    if (left == right) return 0;
+    if (left.isEmpty) return 1;
+    if (right.isEmpty) return -1;
+
+    final leftNumber = int.tryParse(_leadingNumber.firstMatch(left)?.group(0) ?? '');
+    final rightNumber = int.tryParse(_leadingNumber.firstMatch(right)?.group(0) ?? '');
+    if (leftNumber != null && rightNumber != null) {
+      return leftNumber.compareTo(rightNumber);
+    }
+    if (leftNumber != null) return -1;
+    if (rightNumber != null) return 1;
+    return left.compareTo(right);
+  }
+
+  /// 按各游戏的 `sort` 字段重排 [library.games]，使 savedeck.toml 中
+  /// `[[games]]` 区块的先后顺序与排序值一致，从而与各平台前端的展示顺序同步。
+  ///
+  /// 未设置 `sort` 的游戏保持原有相对顺序并排在末尾；排序稳定，
+  /// 排序值相同的条目不会互相打乱。
+  static void reorderGamesBySort(PlatformLibrary library) {
+    if (library.games.length < 2) return;
+    final indexed = library.games.asMap().entries.toList();
+    indexed.sort((a, b) {
+      final cmp = compareSortValues(a.value.sort, b.value.sort);
+      return cmp != 0 ? cmp : a.key.compareTo(b.key);
+    });
+    library.games
+      ..clear()
+      ..addAll(indexed.map((entry) => entry.value));
+  }
+
   static bool _isPlatformCandidate(String name) {
     if (name.startsWith('.')) return false;
     const excluded = <String>{
@@ -533,9 +574,7 @@ class LibraryService {
     }
 
     if (renameMedia) {
-      final oldFolder = mediaFolderName(game.cover) ??
-          mediaFolderName(game.video) ??
-          _safeName(game.name);
+      final oldFolder = _firstMediaFolder(game) ?? _safeName(game.name);
       if (oldFolder != target) {
         await _moveMediaDirectory(platform, oldFolder, target);
       }
@@ -548,8 +587,20 @@ class LibraryService {
       updated = updated.copyWith(
         cover: fix(updated.cover),
         video: fix(updated.video),
+        wheel: fix(updated.wheel),
+        boxTexture: fix(updated.boxTexture),
+        box3D: fix(updated.box3D),
+        support2D: fix(updated.support2D),
+        fanart: fix(updated.fanart),
+        mixrbv: fix(updated.mixrbv),
         clearCover: updated.cover == null,
         clearVideo: updated.video == null,
+        clearWheel: updated.wheel == null,
+        clearBoxTexture: updated.boxTexture == null,
+        clearBox3D: updated.box3D == null,
+        clearSupport2D: updated.support2D == null,
+        clearFanart: updated.fanart == null,
+        clearMixrbv: updated.mixrbv == null,
       );
     }
 
@@ -606,8 +657,7 @@ class LibraryService {
     String oldName,
     String newName,
   ) async {
-    final oldFolder =
-        mediaFolderName(game.cover) ?? mediaFolderName(game.video) ?? _safeName(oldName);
+    final oldFolder = _firstMediaFolder(game) ?? _safeName(oldName);
     final newFolder = _safeName(newName);
     if (oldFolder == newFolder) return game;
     await _moveMediaDirectory(platform, oldFolder, newFolder);
@@ -616,9 +666,35 @@ class LibraryService {
     return game.copyWith(
       cover: fix(game.cover),
       video: fix(game.video),
+      wheel: fix(game.wheel),
+      boxTexture: fix(game.boxTexture),
+      box3D: fix(game.box3D),
+      support2D: fix(game.support2D),
+      fanart: fix(game.fanart),
+      mixrbv: fix(game.mixrbv),
       clearCover: game.cover == null,
       clearVideo: game.video == null,
+      clearWheel: game.wheel == null,
+      clearBoxTexture: game.boxTexture == null,
+      clearBox3D: game.box3D == null,
+      clearSupport2D: game.support2D == null,
+      clearFanart: game.fanart == null,
+      clearMixrbv: game.mixrbv == null,
     );
+  }
+
+  /// 从任意媒体路径推断当前媒体目录名。
+  static String? _firstMediaFolder(GameEntry game) {
+    final paths = <String?>[
+      game.cover,
+      game.video,
+      for (final tag in GameEntry.resourceTags) game.resourcePath(tag),
+    ];
+    for (final path in paths) {
+      final folder = mediaFolderName(path);
+      if (folder != null) return folder;
+    }
+    return null;
   }
 
   static String _safeName(String name) {
@@ -637,11 +713,12 @@ class LibraryService {
     String gameName, {
     bool cover = false,
     bool video = false,
+    bool resources = false,
   }) async {
     final dir = Directory(p.join(platform.directory, 'media', _safeName(gameName)));
     if (!await dir.exists()) return;
     if (cover) {
-      for (final ext in const <String>['png', 'jpg', 'jpeg', 'webp']) {
+      for (final ext in const <String>['png', 'jpg', 'jpeg', 'webp', 'gif']) {
         final file = File(p.join(dir.path, 'cover.$ext'));
         if (await file.exists()) await file.delete();
       }
@@ -650,6 +727,14 @@ class LibraryService {
       for (final ext in const <String>['mp4', 'webm', 'avi']) {
         final file = File(p.join(dir.path, 'video.$ext'));
         if (await file.exists()) await file.delete();
+      }
+    }
+    if (resources) {
+      for (final tag in GameEntry.resourceTags) {
+        for (final ext in const <String>['png', 'jpg', 'jpeg', 'webp', 'gif']) {
+          final file = File(p.join(dir.path, '$tag.$ext'));
+          if (await file.exists()) await file.delete();
+        }
       }
     }
     if ((await dir.list().toList()).isEmpty) await dir.delete();
