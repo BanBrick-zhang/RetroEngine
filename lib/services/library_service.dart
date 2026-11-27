@@ -717,24 +717,27 @@ class LibraryService {
   }) async {
     final dir = Directory(p.join(platform.directory, 'media', _safeName(gameName)));
     if (!await dir.exists()) return;
-    if (cover) {
-      for (final ext in const <String>['png', 'jpg', 'jpeg', 'webp', 'gif']) {
-        final file = File(p.join(dir.path, 'cover.$ext'));
-        if (await file.exists()) await file.delete();
-      }
-    }
-    if (video) {
-      for (final ext in const <String>['mp4', 'webm', 'avi']) {
-        final file = File(p.join(dir.path, 'video.$ext'));
-        if (await file.exists()) await file.delete();
-      }
-    }
+    const images = <String>['png', 'jpg', 'jpeg', 'webp', 'gif'];
+    const videos = <String>['mp4', 'webm', 'avi'];
+    final targets = <String, List<String>>{};
+    if (cover) targets['cover'] = images;
+    if (video) targets['video'] = videos;
     if (resources) {
       for (final tag in GameEntry.resourceTags) {
-        for (final ext in const <String>['png', 'jpg', 'jpeg', 'webp', 'gif']) {
-          final file = File(p.join(dir.path, '$tag.$ext'));
-          if (await file.exists()) await file.delete();
-        }
+        targets[tag] = images;
+      }
+    }
+    if (targets.isNotEmpty) {
+      for (final entity in await dir.list().toList()) {
+        if (entity is! File) continue;
+        final name = p.basename(entity.path).toLowerCase();
+        final matched = targets.entries.any((entry) {
+          final base = entry.key.toLowerCase();
+          return entry.value.any(
+            (ext) => name == '$base.$ext' || (name.startsWith('$base-') && name.endsWith('.$ext')),
+          );
+        });
+        if (matched) await entity.delete();
       }
     }
     if ((await dir.list().toList()).isEmpty) await dir.delete();

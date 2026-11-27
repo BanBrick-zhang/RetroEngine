@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 应用私有目录 -->
+    <files-path name="files" path="." />
+    <cache-path name="cache" path="." />
+    <!-- 主存储（/storage/emulated/0） -->
+    <external-path name="external" path="." />
+    <!-- SD 卡等其它存储卷 -->
+    <root-path name="storage" path="/storage" />
+    <root-path name="mnt" path="/mnt" />
+</paths>

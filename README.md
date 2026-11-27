@@ -2,25 +2,40 @@
 
 基于 Flutter 的 **SaveDeck 游戏库管理 + ScreenScraper 自动搜刮工具**，仅面向 Android。
 
-[GitHub 仓库](https://github.com/BanBrick-zhang/RetroEngine) · [问题反馈](https://github.com/BanBrick-zhang/RetroEngine/issues) · 当前版本：`0.0.7`
+[GitHub 仓库](https://github.com/BanBrick-zhang/RetroEngine) · [问题反馈](https://github.com/BanBrick-zhang/RetroEngine/issues) · 当前版本：`0.1.2`
 
 RetroEngine（pubspec 包名 `savedeck_toolkit`）直接读写设备共享存储中的游戏库目录，识别各平台 ROM 与 `savedeck.toml`，并从 ScreenScraper.fr 拉取封面（box-2D）、视频、简介、开发商、发售日期及 wheel、box-texture、box-3D、support-2D、fanart、mixrbv 等资源，写回配置与 `media/` 目录。
 
 ## 一、功能
 
 - **游戏库**：绑定游戏库总目录后自动扫描各平台子目录，识别 ROM；无 `savedeck.toml`
-  时按扩展名自动生成条目，搜刮或保存时自动创建配置文件。
-- **手动搜刮**：按名称搜索并选择候选，可单独勾选封面、视频、简介；任务提交后在后台
-  下载，编辑界面可查看进度条，不阻塞其他操作。
-- **编辑游戏**：名称、ROM 路径、排序、开发商、发售日期、封面、视频、各类附加资源、
-  启动指令、UUID、简介均可编辑；可单独删除封面图片、视频、附加图片资源或简介；
+  时按扩展名自动生成条目，搜刮或保存时自动创建配置文件。「游戏库」标题与平台标签
+  合并为顶部同一行，平台可横向滚动切换；右上角可切换列表视图、网格视图与轮播图
+  视图，选择会被记住。横屏优先：网格按可用宽度自适应列数、列表变为双列紧凑行、
+  轮播图左侧大封面右侧信息栏，一屏展示更多内容。竖屏轮播卡片上下排列封面与简介，
+  保证首屏完整可见；卡片统一带阴影、按压缩放反馈与翻页缩放淡入动画。
+- **次级菜单**：左上角菜单按钮滑出侧栏（横屏约占 1/4 屏宽），依次为账号、
+  游戏生涯、云存档、设置选项；账号页展示 ScreenScraper 账号状态并可跳转设置，
+  游戏生涯与云存档为后续功能预留说明页。
+- **游戏详情**：只读展示，支持列表视图与轮播视图两种模式（可记住）。
+  轮播视图左侧显示 box2D 封面、开发商、发行日期与简介，右侧依次轮播
+  wheel / box-texture / support-2D / fanart / mixrbv / 视频。横屏时列表视图
+  自动分左右两栏（信息+简介 / 视频+缩略图），信息栏宽度与封面高度随屏幕伸缩。
+- **编辑游戏**：详情页右上角「编辑」弹窗内统一完成——名称、ROM 路径、排序、开发商、
+  发售日期、封面、视频、各类附加资源路径、启动指令、UUID、简介均可编辑；
+  横屏/宽屏下基本信息与媒体资源分两列并排显示，减少纵向滚动；「手动搜刮」按钮
+  置于弹窗顶部，可随时点击。可单独删除封面图片、视频、附加图片资源或简介；
   保存时可开启按游戏名同步重命名 ROM（保留扩展名）与 media 媒体目录。
+- **手动搜刮**：按名称搜索并选择候选，可勾选全部 11 类内容（默认开发商、发行日期、
+  box2D、简介、视频）；任务提交后在后台下载，编辑弹窗与详情页均可查看进度条，
+  不阻塞其他操作。
 - **设置**：游戏库目录、ScreenScraper 账号（开发者凭据仅构建期注入，应用内不可填写）、
-  首选语言、下载开关、视频延时自动播放、ROM 与媒体目录重命名开关；
-  所有菜单默认折叠，入口在顶部右侧。
-- **添加 ROM**：源文件若已在目标平台目录内则直接引用，不再重复复制。
-- **操作适配**：无底部导航栏，默认进入游戏库；横屏网格自动调整为四列，
-  支持手柄/键盘方向键焦点导航。
+  首选语言、搜刮选项、游戏详情页展示内容、视频延时自动播放、ROM 与媒体目录重命名开关；
+  所有菜单默认折叠，入口在左上角次级菜单的「设置选项」。
+- **添加 ROM**：源文件若已在目标平台目录内则直接引用，不再重复复制；添加后自动打开
+  编辑弹窗便于立即搜刮。
+- **操作适配**：以横屏为主要使用场景，竖屏为次要场景，各页面横屏均做了
+  分栏/多列适配；无底部导航栏，默认进入游戏库，支持手柄/键盘方向键焦点导航。
 - **权限引导**：绑定目录后检测真实读写权限，可直达系统「所有文件访问权限」页面；
   授权返回应用后自动重新读取，无需重新选择目录。
 
@@ -97,7 +112,11 @@ flutter test
 │   │   ├── background_scrape_service.dart  后台搜刮队列与进度
 │   │   └── version_service.dart       读取 pubspec 版本号
 │   ├── screens                       游戏库 / 详情 / 设置 / 文件浏览器
-│   └── widgets/permission_dialog.dart  权限引导
+│   └── widgets
+│       ├── game_edit_dialog.dart     游戏编辑弹窗（含资源路径与搜刮）
+│       ├── library_carousel.dart     游戏库轮播图视图
+│       ├── video_preview.dart        内嵌视频播放
+│       └── permission_dialog.dart    权限引导
 ├── test                              单元测试（toml / library / screenscraper / systems）
 ├── tool/fetch_screenscraper_systems.dart  平台映射表生成脚本
 ├── pubspec.yaml
@@ -116,9 +135,12 @@ flutter test
     ├── 游戏A.gba
     └── media/
         └── 游戏A/
-            ├── cover.png
-            └── video.mp4
+            ├── cover-7ca294ab-8018-45cd-9fc7-481d6b504bb3.png
+            └── video-7ca294ab-8018-45cd-9fc7-481d6b504bb3.mp4
 ```
+
+> 搜刮下载的媒体文件统一以 `<资源类型>-<游戏 UUID>.<扩展名>` 命名，
+> 同时兼容旧版本无 UUID 的 `cover.png` / `video.mp4` 等文件。
 
 `savedeck.toml` 示例：
 
@@ -132,16 +154,16 @@ name = "示例游戏"
 file = "示例游戏.gba"
 id = "7ca294ab-8018-45cd-9fc7-481d6b504bb3"
 description = "游戏简介"
-cover = "media/示例游戏/cover.png"
-video = "media/示例游戏/video.mp4"
+cover = "media/示例游戏/cover-7ca294ab-8018-45cd-9fc7-481d6b504bb3.png"
+video = "media/示例游戏/video-7ca294ab-8018-45cd-9fc7-481d6b504bb3.mp4"
 developpeur = "Square"
 dates = "1994-04-02"
-wheel = "media/示例游戏/wheel.png"
-box-texture = "media/示例游戏/box-texture.png"
-box-3D = "media/示例游戏/box-3D.png"
-support-2D = "media/示例游戏/support-2D.png"
-fanart = "media/示例游戏/fanart.jpg"
-mixrbv = "media/示例游戏/mixrbv.png"
+wheel = "media/示例游戏/wheel-7ca294ab-8018-45cd-9fc7-481d6b504bb3.png"
+box-texture = "media/示例游戏/box-texture-7ca294ab-8018-45cd-9fc7-481d6b504bb3.png"
+box-3D = "media/示例游戏/box-3D-7ca294ab-8018-45cd-9fc7-481d6b504bb3.png"
+support-2D = "media/示例游戏/support-2D-7ca294ab-8018-45cd-9fc7-481d6b504bb3.png"
+fanart = "media/示例游戏/fanart-7ca294ab-8018-45cd-9fc7-481d6b504bb3.jpg"
+mixrbv = "media/示例游戏/mixrbv-7ca294ab-8018-45cd-9fc7-481d6b504bb3.png"
 ```
 
 解析器兼容 UTF-8 / GBK 编码、多行字符串与内联表写法，未识别字段会原样保留。
@@ -209,6 +231,14 @@ mixrbv = "media/示例游戏/mixrbv.png"
   目录已自动保存，会自动重新扫描，无需重新选择。
 
 ## 八、版本记录
+
+### 0.1.2
+
+- 新增模拟器管理：内置模拟器目录与模拟器选择器，支持为平台/游戏配置启动指令并直接拉起游戏。
+- 新增云存档：基于 WebDAV 的存档上传、下载与同步，新增云存档页面与相关服务。
+- 游戏库支持拼音首字母检索、轮播展示与侧边菜单，游戏编辑改为独立弹窗/页面，新增视频预览与统一 Toast、信息弹窗组件。
+- 重构游戏详情与游戏库页面，扩展搜刮选项与资源字段模型；设置项与偏好持久化同步扩充。
+- 仓库不再跟踪 APK 产物，`*.apk` 已加入 `.gitignore`；开发者凭据仍仅在构建期注入。
 
 ### 0.0.7
 

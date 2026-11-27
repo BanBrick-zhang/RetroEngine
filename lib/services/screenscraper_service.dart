@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 
 import '../models/library.dart';
+import '../models/scrape_options.dart';
 import 'library_service.dart';
 import 'toml_service.dart';
 
@@ -400,6 +401,8 @@ class ScreenscraperService {
 
   /// 执行搜刮并把媒体写入 SaveDeck 游戏库，更新 [[games]] 条目。
   ///
+  /// [options] 决定本次搜刮获取/写入哪些字段（默认开发商、发行日期、box2D、
+  /// 简介、视频）。
   /// [renameGame] 为 false 时保留现有游戏名（手动搜刮选择「不应用翻译名」）；
   /// [nameOverride] 非空时用它代替 ScreenScraper 返回的名称。
   /// [onProgress] 用于汇报阶段文本。
@@ -408,9 +411,7 @@ class ScreenscraperService {
     required GameEntry game,
     required ScrapeCandidate candidate,
     int? systemId,
-    bool downloadCover = true,
-    bool downloadVideo = true,
-    bool overwriteDescription = true,
+    ScrapeOptions options = const ScrapeOptions(),
     bool renameGame = true,
     String? nameOverride,
     void Function(String message)? onProgress,
@@ -456,61 +457,61 @@ class ScreenscraperService {
         renameMedia: true,
       );
     }
+    // 所有下载文件名都带上 ROM 的 UUID（cover-<id>.webp、video-<id>.mp4 等），
+    // 尚未生成 id 时自动生成并写回 TOML。
+    final id = (game.id != null && game.id!.trim().isNotEmpty)
+        ? game.id!.trim()
+        : LibraryService.newId();
     var cover = game.cover;
     var video = game.video;
     var description = game.description;
 
     final mediaDir = await LibraryService.mediaDirectory(platform, newName);
 
-    if (downloadCover && detail.coverUrl != null) {
+    if (options.downloadCover && detail.coverUrl != null) {
       onProgress?.call('正在下载封面…');
       final ext = _mediaExtension(detail.coverFormat, 'png');
-      final file = File(p.join(mediaDir.path, 'cover.$ext'));
+      final fileName = 'cover-$id.$ext';
+      final file = File(p.join(mediaDir.path, fileName));
       await LibraryService.downloadStream(
         detail.coverUrl!,
         file.path,
         onProgress: onDownloadProgress,
       );
-      cover = LibraryService.mediaRelativePath(newName, p.basename(file.path));
-      for (final oldExt in _imageExtensions) {
-        if (oldExt == ext) continue;
-        final old = File(p.join(mediaDir.path, 'cover.$oldExt'));
-        if (await old.exists()) await old.delete();
-      }
+      cover = LibraryService.mediaRelativePath(newName, fileName);
+      await _removePreviousMedia(mediaDir, 'cover', fileName, _imageExtensions);
     }
 
-    if (downloadVideo && detail.videoUrl != null) {
+    if (options.downloadVideo && detail.videoUrl != null) {
       onProgress?.call('正在下载视频…');
       final ext = _mediaExtension(detail.videoFormat, 'mp4');
-      final file = File(p.join(mediaDir.path, 'video.$ext'));
+      final fileName = 'video-$id.$ext';
+      final file = File(p.join(mediaDir.path, fileName));
       try {
         await LibraryService.downloadStream(
           detail.videoUrl!,
           file.path,
           onProgress: onDownloadProgress,
         );
-        video = LibraryService.mediaRelativePath(newName, p.basename(file.path));
-        for (final oldExt in const <String>['mp4', 'webm', 'avi']) {
-          if (oldExt == ext) continue;
-          final old = File(p.join(mediaDir.path, 'video.$oldExt'));
-          if (await old.exists()) await old.delete();
-        }
+        video = LibraryService.mediaRelativePath(newName, fileName);
+        await _removePreviousMedia(mediaDir, 'video', fileName, _videoExtensions);
       } catch (_) {
         onProgress?.call('视频下载失败，已跳过');
       }
     }
 
-    // 附加资源：文件名即 TOML 标签（wheel.png、box-texture.png 等）。
+    // 附加资源：只有勾选的标签才会下载，文件名 `<标签>-<id>.<扩展名>`。
     final resourcePaths = <String, String?>{
       for (final tag in GameEntry.resourceTags) tag: game.resourcePath(tag),
     };
-    for (final tag in GameEntry.resourceTags) {
+    for (final tag in options.resourceTags) {
       final media = detail.resources[tag];
       if (media == null || media.url.isEmpty) continue;
       final label = resourceLabels[tag] ?? tag;
       onProgress?.call('正在下载$label…');
       final ext = _mediaExtension(media.format, 'png');
-      final file = File(p.join(mediaDir.path, '$tag.$ext'));
+      final fileName = '$tag-$id.$ext';
+      final file = File(p.join(mediaDir.path, fileName));
       try {
         await LibraryService.downloadStream(
           media.url,
@@ -518,31 +519,32 @@ class ScreenscraperService {
           onProgress: onDownloadProgress,
         );
         resourcePaths[tag] =
-            LibraryService.mediaRelativePath(newName, p.basename(file.path));
-        for (final oldExt in _imageExtensions) {
-          if (oldExt == ext) continue;
-          final old = File(p.join(mediaDir.path, '$tag.$oldExt'));
-          if (await old.exists()) await old.delete();
-        }
+            LibraryService.mediaRelativePath(newName, fileName);
+        await _removePreviousMedia(mediaDir, tag, fileName, _imageExtensions);
       } catch (_) {
         onProgress?.call('$label下载失败，已跳过');
       }
     }
 
-    if (overwriteDescription && detail.description != null && detail.description!.isNotEmpty) {
+    if (options.overwriteDescription &&
+        detail.description != null &&
+        detail.description!.isNotEmpty) {
       description = detail.description;
     }
 
-    final developer = (detail.developer?.trim().isNotEmpty ?? false)
+    final developer = options.includeDeveloper &&
+            (detail.developer?.trim().isNotEmpty ?? false)
         ? detail.developer!.trim()
         : game.developer;
-    final releaseDate = (detail.releaseDate?.trim().isNotEmpty ?? false)
+    final releaseDate = options.includeReleaseDate &&
+            (detail.releaseDate?.trim().isNotEmpty ?? false)
         ? detail.releaseDate!.trim()
         : game.releaseDate;
 
     final updated = game.copyWith(
       name: newName,
       description: description,
+      id: id,
       cover: cover,
       video: video,
       developer: developer,
@@ -576,9 +578,7 @@ class ScreenscraperService {
   Future<GameEntry?> scrapeAuto({
     required PlatformLibrary platform,
     required GameEntry game,
-    bool downloadCover = true,
-    bool downloadVideo = true,
-    bool overwriteDescription = true,
+    ScrapeOptions options = const ScrapeOptions(),
     void Function(String message)? onProgress,
     void Function(int received, int? total)? onDownloadProgress,
   }) async {
@@ -598,12 +598,45 @@ class ScreenscraperService {
       game: game,
       candidate: candidates.first,
       systemId: systemId,
-      downloadCover: downloadCover,
-      downloadVideo: downloadVideo,
-      overwriteDescription: overwriteDescription,
+      options: options,
       onProgress: onProgress,
       onDownloadProgress: onDownloadProgress,
     );
+  }
+
+  static const List<String> _videoExtensions = <String>[
+    'mp4',
+    'webm',
+    'avi',
+  ];
+
+  /// 删除同一资源此前下载的文件（旧命名 `cover.png` 或其它 id/扩展名），
+  /// 避免媒体目录里堆积过期文件。
+  static Future<void> _removePreviousMedia(
+    Directory dir,
+    String baseName,
+    String keepFileName,
+    Iterable<String> extensions,
+  ) async {
+    final List<FileSystemEntity> entities;
+    try {
+      entities = await dir.list().toList();
+    } catch (_) {
+      return;
+    }
+    final base = baseName.toLowerCase();
+    for (final entity in entities) {
+      if (entity is! File) continue;
+      final name = p.basename(entity.path).toLowerCase();
+      if (name == keepFileName.toLowerCase()) continue;
+      final isTarget = extensions.any(
+        (ext) => name == '$base.$ext' || (name.startsWith('$base-') && name.endsWith('.$ext')),
+      );
+      if (!isTarget) continue;
+      try {
+        await entity.delete();
+      } catch (_) {}
+    }
   }
 
   static String _mediaExtension(String? format, String fallback) {

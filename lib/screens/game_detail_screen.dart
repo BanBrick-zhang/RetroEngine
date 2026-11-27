@@ -1,844 +1,527 @@
-import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
-import 'package:video_player/video_player.dart';
 
+import '../models/emulator.dart';
 import '../models/library.dart';
-import '../models/scrape_options.dart';
+import '../models/resource_fields.dart';
 import '../services/background_scrape_service.dart';
-import '../services/library_service.dart';
+import '../services/emulator_service.dart';
 import '../services/preferences_service.dart';
-import '../services/screenscraper_service.dart';
-import '../services/toml_service.dart';
-import '../services/translation_service.dart';
 import '../theme.dart';
-import '../widgets/translation_dialog.dart';
+import '../widgets/app_toast.dart';
+import '../widgets/emulator_picker.dart';
+import '../widgets/game_edit_dialog.dart';
+import '../widgets/video_preview.dart';
 
-class _ManualSearchResult {
-  final String query;
-  final ScrapeOptions options;
-
-  /// 通过「翻译」得到并用于搜索的英文名；搜刮前需确认是否应用于游戏名。
-  final String? translatedName;
-
-  const _ManualSearchResult(this.query, this.options, this.translatedName);
-}
-
+/// 游戏详情页：只负责展示，所有修改都通过右上角「编辑」弹窗完成。
+///
+/// 采用轮播视图：左侧展示 box2D 封面、开发商、发行日期与简介，
+/// 右侧依次轮播 wheel / box-texture / support-2D / fanart / mixrbv / 视频。
 class GameDetailScreen extends StatefulWidget {
   final PlatformLibrary platform;
   final GameEntry game;
 
-  const GameDetailScreen({super.key, required this.platform, required this.game});
+  /// 添加 ROM 后立即弹出编辑弹窗（用于新增条目后的搜刮/补全）。
+  final bool editOnOpen;
+
+  const GameDetailScreen({
+    super.key,
+    required this.platform,
+    required this.game,
+    this.editOnOpen = false,
+  });
 
   @override
   State<GameDetailScreen> createState() => _GameDetailScreenState();
 }
 
-class _GameDetailScreenState extends State<GameDetailScreen> {
-  late final TextEditingController _name;
-  late final TextEditingController _file;
-  late final TextEditingController _sort;
-  late final TextEditingController _description;
-  late final TextEditingController _cover;
-  late final TextEditingController _video;
-  late final TextEditingController _launch;
-  late final TextEditingController _id;
-  late final TextEditingController _developer;
-  late final TextEditingController _releaseDate;
-  late final TextEditingController _wheel;
-  late final TextEditingController _boxTexture;
-  late final TextEditingController _box3D;
-  late final TextEditingController _support2D;
-  late final TextEditingController _fanart;
-  late final TextEditingController _mixrbv;
+class _GameDetailScreenState extends State<GameDetailScreen>
+    with WidgetsBindingObserver {
+  late GameEntry _game = widget.game;
 
-  bool _busy = false;
-  String? _status;
-  String? _remoteStatus;
-  double _remoteProgress = 0;
-  String? _lastRemoteState;
+  /// 详情页需要展示的字段（来自设置页「游戏详情页设置」）。
+  Set<String> _detailFields = <String>{...ResourceFields.defaults};
+
+  /// 库中数据是否发生变化，退出时回传给游戏库以触发刷新。
+  bool _changed = false;
+  bool _deleted = false;
+
+  /// 当前平台的默认模拟器（未配置时为 null）。
+  EmulatorConfig? _emulator;
+  bool _launching = false;
+
+  /// 已发起启动，等待从模拟器返回时给出提示。
+  bool _awaitingReturn = false;
 
   @override
   void initState() {
     super.initState();
-    _name = TextEditingController(text: widget.game.name);
-    _file = TextEditingController(text: widget.game.file);
-    _sort = TextEditingController(text: widget.game.sort ?? '');
-    _description = TextEditingController(text: widget.game.description ?? '');
-    _cover = TextEditingController(text: widget.game.cover ?? '');
-    _video = TextEditingController(text: widget.game.video ?? '');
-    _launch = TextEditingController(text: widget.game.launch ?? '');
-    _id = TextEditingController(text: widget.game.id ?? '');
-    _developer = TextEditingController(text: widget.game.developer ?? '');
-    _releaseDate = TextEditingController(text: widget.game.releaseDate ?? '');
-    _wheel = TextEditingController(text: widget.game.wheel ?? '');
-    _boxTexture = TextEditingController(text: widget.game.boxTexture ?? '');
-    _box3D = TextEditingController(text: widget.game.box3D ?? '');
-    _support2D = TextEditingController(text: widget.game.support2D ?? '');
-    _fanart = TextEditingController(text: widget.game.fanart ?? '');
-    _mixrbv = TextEditingController(text: widget.game.mixrbv ?? '');
-    BackgroundScrapeService.instance.addListener(_onScrapeChanged);
+    WidgetsBinding.instance.addObserver(this);
+    _loadSettings();
+    _loadEmulator();
+    BackgroundScrapeService.instance.addListener(_onBackgroundScrape);
+    if (widget.editOnOpen) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _openEditor());
+    }
   }
 
   @override
   void dispose() {
-    BackgroundScrapeService.instance.removeListener(_onScrapeChanged);
-    for (final c in [
-      _name,
-      _file,
-      _sort,
-      _description,
-      _cover,
-      _video,
-      _launch,
-      _id,
-      _developer,
-      _releaseDate,
-      _wheel,
-      _boxTexture,
-      _box3D,
-      _support2D,
-      _fanart,
-      _mixrbv,
-    ]) {
-      c.dispose();
-    }
+    WidgetsBinding.instance.removeObserver(this);
+    BackgroundScrapeService.instance.removeListener(_onBackgroundScrape);
     super.dispose();
   }
 
-  /// 监听当前游戏的后台下载进度，完成后把结果同步回输入框。
-  void _onScrapeChanged() {
-    if (!mounted) return;
-    final snapshot = BackgroundScrapeService.instance.status;
-    final key = '${widget.platform.directory}/${widget.game.file}';
-    final state = snapshot.statuses[key];
-    if (state == null) return;
-    final progress = snapshot.progresses[key] ?? 0;
-    final finished = state == '已完成' || state.startsWith('失败');
-    final previous = _lastRemoteState;
-    if (state == previous && progress == _remoteProgress && !finished) return;
-    _lastRemoteState = state;
-    setState(() {
-      _remoteStatus = state;
-      _remoteProgress = progress;
-    });
-    if (finished && previous != state) {
-      final index = widget.platform.games
-          .indexWhere((g) => g.file == widget.game.file);
-      if (index >= 0) _syncControllers(widget.platform.games[index]);
-    }
-  }
-
-  Future<ScreenscraperService> _service() async {
-    final username = await PreferencesService.ssUsername;
-    final password = await PreferencesService.ssPassword;
-    final language = await PreferencesService.language;
-    return ScreenscraperService(
-      username: username,
-      password: password,
-      preferredLanguage: language,
-    );
-  }
-
-  Future<void> _scrape({
-    required String manualQuery,
-    ScrapeOptions? options,
-    String? translatedName,
-  }) async {
-    final romPath = p.join(widget.platform.directory, _file.text.trim());
-    if (!await File(romPath).exists()) {
-      _showMessage('ROM 文件不存在：$_romPathHint');
-      return;
-    }
-
-    setState(() {
-      _busy = true;
-      _status = '正在搜索：$manualQuery';
-    });
-
-    try {
-      final service = await _service();
-      final systemId = PlatformCatalog.ssIdFor(widget.platform.platform);
-      final List<ScrapeCandidate> candidates;
-
-      candidates = await service.searchByName(manualQuery, systemId);
-
-      if (!mounted) return;
-      setState(() => _busy = false);
-
-      if (candidates.isEmpty) {
-        _showMessage('没有找到匹配的游戏，请尝试手动搜索');
-        return;
-      }
-      // 搜索结果全部展示，由用户手动选择要使用的条目。
-      _showCandidates(candidates, options, translatedName);
-    } catch (e) {
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // 从模拟器回到应用时详情页仍在栈顶，顺带提示已经返回。
+    if (state == AppLifecycleState.resumed && _awaitingReturn) {
+      _awaitingReturn = false;
       if (mounted) {
-        setState(() {
-          _busy = false;
-          _status = null;
-        });
-        _showMessage('搜刮失败：$e');
+        AppToast.show(context, '已返回游戏详情',
+            icon: Icons.arrow_back_rounded);
       }
     }
   }
 
-  String get _romPathHint => _file.text.trim().isEmpty ? '（未填写文件）' : _file.text.trim();
-
-  /// 搜刮前确认是否把翻译后的英文名写为游戏名称（默认不应用）。
-  Future<bool> _confirmTranslatedName({
-    required String translatedName,
-    required String currentName,
-  }) async {
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        backgroundColor: AppTheme.surface,
-        title: const Text('应用翻译后的名称？',
-            style: TextStyle(color: AppTheme.textPrimary, fontSize: 17)),
-        content: Text(
-          '搜索使用的英文名：$translatedName\n'
-          '当前游戏名称：$currentName\n\n'
-          '默认保留当前名称。',
-          style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('不应用'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('应用'),
-          ),
-        ],
-      ),
-    );
-    // 点击遮罩或返回键视为「不应用」。
-    return result ?? false;
-  }
-
-  /// 选定候选后交给后台队列下载，本页不阻塞、不弹遮罩。
-  Future<void> _apply(
-    ScrapeCandidate candidate,
-    ScrapeOptions? options,
-    String? translatedName,
-  ) async {
-    final currentName = _currentGame().name;
-    var applyTranslatedName = false;
-    if (translatedName != null &&
-        translatedName.isNotEmpty &&
-        translatedName != currentName) {
-      applyTranslatedName = await _confirmTranslatedName(
-        translatedName: translatedName,
-        currentName: currentName,
-      );
-      if (!mounted) return;
-    }
-
-    final cover =
-        options?.downloadCover ?? await PreferencesService.downloadCover;
-    final video =
-        options?.downloadVideo ?? await PreferencesService.downloadVideo;
-    final overwrite = options?.overwriteDescription ??
-        await PreferencesService.overwriteDescription;
-
-    BackgroundScrapeService.instance.enqueueCandidate(
-      platform: widget.platform,
-      game: _currentGame(),
-      candidate: candidate,
-      systemId: PlatformCatalog.ssIdFor(widget.platform.platform),
-      options: ScrapeOptions(
-        downloadCover: cover,
-        downloadVideo: video,
-        overwriteDescription: overwrite,
-      ),
-      // 使用过翻译名但选择「不应用」时，保留原游戏名。
-      renameGame: translatedName == null || applyTranslatedName,
-      nameOverride: applyTranslatedName ? translatedName : null,
+  Future<void> _loadEmulator() async {
+    final config = await EmulatorService.instance.configFor(
+      widget.platform.platform,
     );
     if (!mounted) return;
-    setState(() {
-      _remoteStatus = '排队中…';
-      _remoteProgress = 0;
-    });
-    _showMessage('已提交到后台下载，可在当前页面查看进度');
+    setState(() => _emulator = config);
   }
 
-  void _showCandidates(
-    List<ScrapeCandidate> candidates,
-    ScrapeOptions? options,
-    String? translatedName,
-  ) {
-    // 仅用于辅助识别结果的译名缓存，不写入游戏库；保存前可在详情页修改。
-    final translations = <String, String>{};
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: AppTheme.surface,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (sheetContext) => StatefulBuilder(
-        builder: (context, setSheetState) => SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text('选择匹配的游戏（共 ${candidates.length} 条）',
-                    style: const TextStyle(
-                        color: AppTheme.textPrimary,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600)),
-              ),
-              Flexible(
-                child: ListView.separated(
-                  shrinkWrap: true,
-                  itemCount: candidates.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1),
-                  itemBuilder: (context, index) {
-                    final item = candidates[index];
-                    final translated = translations[item.gameId];
-                    return ListTile(
-                      title: Text(item.name,
-                          style: const TextStyle(color: AppTheme.textPrimary)),
-                      subtitle: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            [item.region, item.systemName]
-                                .where((e) => e != null)
-                                .join(' · '),
-                            style: const TextStyle(
-                                color: AppTheme.textSecondary, fontSize: 12),
-                          ),
-                          if (translated != null)
-                            Text(translated,
-                                style: const TextStyle(
-                                    color: AppTheme.accent, fontSize: 12)),
-                        ],
-                      ),
-                      trailing: IconButton(
-                        tooltip: '翻译名称',
-                        iconSize: 18,
-                        icon: const Icon(Icons.translate),
-                        onPressed: () async {
-                          // 记住当前弹层路由，返回后据此判断弹层是否已被关闭。
-                          final route = ModalRoute.of(sheetContext);
-                          final messenger = ScaffoldMessenger.of(context);
-                          try {
-                            final text = await TranslationService.autoTranslate(
-                                item.name);
-                            if (route != null && !route.isCurrent) return;
-                            // ignore: use_build_context_synchronously
-                            final applied = await showTranslationResultDialog(
-                              sheetContext,
-                              original: item.name,
-                              translated: text,
-                              title: '翻译名称',
-                              directionLabel:
-                                  TranslationService.containsChinese(item.name)
-                                      ? '译文：英文'
-                                      : '译文：中文',
-                              maxLines: 2,
-                            );
-                            if (applied == null || applied.isEmpty) return;
-                            if (route != null && !route.isCurrent) return;
-                            setSheetState(
-                                () => translations[item.gameId] = applied);
-                          } catch (e) {
-                            messenger.showSnackBar(
-                              SnackBar(content: Text('翻译失败：$e')),
-                            );
-                          }
-                        },
-                      ),
-                      onTap: () {
-                        Navigator.pop(context);
-                        _apply(item, options, translatedName);
-                      },
-                    );
-                  },
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
+  Future<void> _loadSettings() async {
+    final fields = await PreferencesService.detailFields;
+    if (!mounted) return;
+    setState(() => _detailFields = fields);
   }
 
-  GameEntry _currentGame() {
-    return widget.game.copyWith(
-      name: _name.text.trim(),
-      file: _file.text.trim(),
-      sort: _sort.text.trim().isEmpty ? null : _sort.text.trim(),
-      clearSort: _sort.text.trim().isEmpty,
-      id: _id.text.trim().isEmpty ? null : _id.text.trim(),
-      description: _description.text.trim().isEmpty ? null : _description.text,
-      clearDescription: _description.text.trim().isEmpty,
-      cover: _cover.text.trim().isEmpty ? null : _cover.text.trim(),
-      clearCover: _cover.text.trim().isEmpty,
-      video: _video.text.trim().isEmpty ? null : _video.text.trim(),
-      clearVideo: _video.text.trim().isEmpty,
-      launch: _launch.text.trim().isEmpty ? null : _launch.text.trim(),
-      clearLaunch: _launch.text.trim().isEmpty,
-      developer: _developer.text.trim().isEmpty ? null : _developer.text.trim(),
-      clearDeveloper: _developer.text.trim().isEmpty,
-      releaseDate:
-          _releaseDate.text.trim().isEmpty ? null : _releaseDate.text.trim(),
-      clearReleaseDate: _releaseDate.text.trim().isEmpty,
-      wheel: _emptyToNull(_wheel.text),
-      clearWheel: _wheel.text.trim().isEmpty,
-      boxTexture: _emptyToNull(_boxTexture.text),
-      clearBoxTexture: _boxTexture.text.trim().isEmpty,
-      box3D: _emptyToNull(_box3D.text),
-      clearBox3D: _box3D.text.trim().isEmpty,
-      support2D: _emptyToNull(_support2D.text),
-      clearSupport2D: _support2D.text.trim().isEmpty,
-      fanart: _emptyToNull(_fanart.text),
-      clearFanart: _fanart.text.trim().isEmpty,
-      mixrbv: _emptyToNull(_mixrbv.text),
-      clearMixrbv: _mixrbv.text.trim().isEmpty,
-    );
-  }
-
-  static String? _emptyToNull(String value) =>
-      value.trim().isEmpty ? null : value.trim();
-
-  void _syncControllers(GameEntry game) {
-    _name.text = game.name;
-    _file.text = game.file;
-    _sort.text = game.sort ?? '';
-    _description.text = game.description ?? '';
-    _cover.text = game.cover ?? '';
-    _video.text = game.video ?? '';
-    _launch.text = game.launch ?? '';
-    _id.text = game.id ?? '';
-    _developer.text = game.developer ?? '';
-    _releaseDate.text = game.releaseDate ?? '';
-    _wheel.text = game.wheel ?? '';
-    _boxTexture.text = game.boxTexture ?? '';
-    _box3D.text = game.box3D ?? '';
-    _support2D.text = game.support2D ?? '';
-    _fanart.text = game.fanart ?? '';
-    _mixrbv.text = game.mixrbv ?? '';
-  }
-
-  Future<void> _save() async {
-    var updated = _currentGame();
-    final index =
-        widget.platform.games.indexWhere((g) => g.file == widget.game.file);
-    // 以库中实际条目为基准：widget.game 可能是打开本页时的快照，
-    // 之后被后台搜刮更新过（名称/封面已变），直接用旧名会找不到媒体目录。
-    final stored = index >= 0 ? widget.platform.games[index] : widget.game;
-    final newName = updated.name.trim();
-    if (newName.isNotEmpty && newName != stored.name) {
-      try {
-        updated = await LibraryService.syncGameName(
-          widget.platform,
-          updated,
-          newName,
-          renameRom: await PreferencesService.renameRomOnSave,
-          renameMedia: await PreferencesService.renameMediaOnSave,
-        );
-      } catch (e) {
-        if (mounted) _showMessage('同步 ROM / 媒体文件名失败：$e');
-        return;
-      }
+  /// 后台搜刮会直接改写 platform.games，这里同步最新的条目内容。
+  void _syncFromLibrary() {
+    final games = widget.platform.games;
+    var index = -1;
+    final id = _game.id;
+    // 改名会同时改变 ROM 文件名，因此优先用稳定的 UUID 定位。
+    if (id != null && id.isNotEmpty) {
+      index = games.indexWhere((g) => g.id == id);
     }
-    if (index >= 0) widget.platform.games[index] = updated;
-    // 排序值改变后同步调整 [[games]] 在 TOML 中的先后位置，
-    // 让各平台前端的展示顺序与本页设置的排序一致。
-    LibraryService.reorderGamesBySort(widget.platform);
-    await TomlService.save(widget.platform);
-    if (mounted) Navigator.of(context).pop(true);
-  }
-
-  Future<void> _delete() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: AppTheme.surface,
-        title: const Text('删除游戏', style: TextStyle(color: AppTheme.textPrimary)),
-        content: const Text('将从 savedeck.toml 中移除该条目，媒体文件也会一并删除（ROM 保留）。',
-            style: TextStyle(color: AppTheme.textSecondary)),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('删除', style: TextStyle(color: AppTheme.danger)),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-
-    widget.platform.games.removeWhere((g) => g.file == widget.game.file);
-    await LibraryService.removeMedia(widget.platform, widget.game.name);
-    await TomlService.save(widget.platform);
-    if (mounted) Navigator.of(context).pop(true);
-  }
-
-  /// 按类型删除媒体资源，并同步清空 TOML 中对应字段。
-  Future<void> _deleteMedia() async {
-    var cover = true;
-    var video = true;
-    var description = true;
-    var resources = true;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          backgroundColor: AppTheme.surface,
-          title: const Text('删除媒体资源',
-              style: TextStyle(color: AppTheme.textPrimary)),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('选择要删除的内容：',
-                    style: TextStyle(
-                        color: AppTheme.textSecondary, fontSize: 12)),
-                CheckboxListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  activeColor: AppTheme.accent,
-                  title: const Text('封面图片',
-                      style: TextStyle(
-                          color: AppTheme.textPrimary, fontSize: 13)),
-                  value: cover,
-                  onChanged: (v) => setDialogState(() => cover = v ?? true),
-                ),
-                CheckboxListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  activeColor: AppTheme.accent,
-                  title: const Text('游戏视频',
-                      style: TextStyle(
-                          color: AppTheme.textPrimary, fontSize: 13)),
-                  value: video,
-                  onChanged: (v) => setDialogState(() => video = v ?? true),
-                ),
-                CheckboxListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  activeColor: AppTheme.accent,
-                  title: const Text('其他图片资源（wheel/fanart 等）',
-                      style: TextStyle(
-                          color: AppTheme.textPrimary, fontSize: 13)),
-                  value: resources,
-                  onChanged: (v) =>
-                      setDialogState(() => resources = v ?? true),
-                ),
-                CheckboxListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  activeColor: AppTheme.accent,
-                  title: const Text('游戏简介',
-                      style: TextStyle(
-                          color: AppTheme.textPrimary, fontSize: 13)),
-                  value: description,
-                  onChanged: (v) => setDialogState(() => description = v ?? true),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(dialogContext, false),
-                child: const Text('取消')),
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, true),
-              child: const Text('删除', style: TextStyle(color: AppTheme.danger)),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (confirmed != true) return;
-    if (!cover && !video && !description && !resources) {
-      _showMessage('请至少选择一项要删除的内容');
+    if (index < 0) index = games.indexWhere((g) => g.file == _game.file);
+    if (index < 0) {
+      _deleted = true;
       return;
     }
+    _game = games[index];
+  }
 
-    if (cover || video || resources) {
-      await LibraryService.deleteMediaFiles(
-        widget.platform,
-        widget.game.name,
-        cover: cover,
-        video: video,
-        resources: resources,
-      );
-    }
-    final index = widget.platform.games
-        .indexWhere((g) => g.file == widget.game.file);
-    GameEntry? updated;
-    if (index >= 0) {
-      updated = widget.platform.games[index].copyWith(
-        clearCover: cover,
-        clearVideo: video,
-        clearDescription: description,
-        clearWheel: resources,
-        clearBoxTexture: resources,
-        clearBox3D: resources,
-        clearSupport2D: resources,
-        clearFanart: resources,
-        clearMixrbv: resources,
-      );
-      widget.platform.games[index] = updated;
-    }
-    widget.platform.hasToml = true;
-    await TomlService.save(widget.platform);
+  void _onBackgroundScrape() {
     if (!mounted) return;
-    if (updated != null) {
-      _syncControllers(updated);
-    } else {
-      if (cover) _cover.clear();
-      if (video) _video.clear();
-      if (description) _description.clear();
-      if (resources) {
-        for (final c in [
-          _wheel,
-          _boxTexture,
-          _box3D,
-          _support2D,
-          _fanart,
-          _mixrbv,
-        ]) {
-          c.clear();
+    final previous = _game;
+    setState(() {
+      _syncFromLibrary();
+      if (_game.name != previous.name ||
+          _game.file != previous.file ||
+          _game.cover != previous.cover) {
+        _changed = true;
+      }
+    });
+  }
+
+  /// 启动游戏：未配置模拟器时先弹出选择框，配置完成后再启动。
+  Future<void> _launchGame() async {
+    if (_launching || _deleted) return;
+    setState(() => _launching = true);
+    try {
+      while (true) {
+        try {
+          final outcome = await EmulatorService.instance.launchGame(
+            platform: widget.platform,
+            game: _game,
+          );
+          if (!mounted) return;
+          final config = outcome.config;
+          setState(() => _emulator = config);
+          _awaitingReturn = true;
+          final appOnly = config.mode == LaunchMode.app;
+          AppToast.show(
+            context,
+            appOnly
+                ? '已打开 ${config.label}'
+                : outcome.direct
+                    ? '正在通过 ${config.label} 启动…'
+                    : '${config.label} 无法直接加载 ROM，已打开主界面',
+            icon: outcome.direct && !appOnly
+                ? Icons.play_arrow_rounded
+                : Icons.info_outline_rounded,
+          );
+          return;
+        } on EmulatorNotConfiguredException {
+          final result = await showEmulatorPicker(
+            context,
+            platformName: widget.platform.platform,
+            initial: _emulator,
+          );
+          if (result == null || result.config == null) return;
+          await EmulatorService.instance.saveConfig(
+            widget.platform.platform,
+            result.config,
+          );
+          if (!mounted) return;
+          setState(() => _emulator = result.config);
+          // 让用户看到已保存的配置，再重试启动。
         }
       }
+    } on EmulatorException catch (e) {
+      if (mounted) {
+        AppToast.show(context, e.message, icon: Icons.error_outline);
+      }
+    } finally {
+      if (mounted) setState(() => _launching = false);
     }
-    setState(() {});
-    _showMessage('所选媒体内容已删除并保存到 savedeck.toml');
   }
 
-  void _showMessage(String message) {
+  /// 信息栏中的启动按钮，下方附带当前默认模拟器名称。
+  Widget _launchButton() {
+    final emulator = _emulator;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        FilledButton.icon(
+          onPressed: _launching ? null : _launchGame,
+          style: FilledButton.styleFrom(
+            backgroundColor: AppTheme.accent,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 11),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+          ),
+          icon: _launching
+              ? const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Colors.white),
+                )
+              : const Icon(Icons.play_arrow_rounded, size: 19),
+          label: Text(_launching ? '正在启动…' : '启动游戏',
+              style: const TextStyle(fontSize: 13.5)),
+        ),
+        const SizedBox(height: 5),
+        Text(
+          emulator == null
+              ? '尚未设置默认模拟器，启动时会提示选择'
+              : '默认模拟器：${emulator.label}${emulator.core == null ? '' : ' · ${emulator.core}'}',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(color: AppTheme.textSecondary, fontSize: 10.5),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _openEditor() async {
+    if (_deleted) return;
+    final outcome = await GameEditDialog.show(
+      context,
+      platform: widget.platform,
+      game: _game,
+    );
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    if (outcome == GameEditOutcome.deleted) {
+      Navigator.of(context).pop(true);
+      return;
+    }
+    setState(() {
+      _syncFromLibrary();
+      if (outcome == GameEditOutcome.saved) _changed = true;
+    });
+  }
+
+  String? get _coverFile {
+    final relative = _game.cover;
+    if (relative == null || relative.isEmpty) return null;
+    final path = p.join(widget.platform.directory, relative);
+    return File(path).existsSync() ? path : null;
+  }
+
+  String? get _videoPath {
+    final relative = _game.video;
+    if (relative == null || relative.isEmpty) return null;
+    return p.join(widget.platform.directory, relative);
+  }
+
+  String? _resourcePathOf(String tag) {
+    switch (tag) {
+      case 'wheel':
+        return _game.wheel;
+      case 'box-texture':
+        return _game.boxTexture;
+      case 'box-3D':
+        return _game.box3D;
+      case 'support-2D':
+        return _game.support2D;
+      case 'fanart':
+        return _game.fanart;
+      case 'mixrbv':
+        return _game.mixrbv;
+    }
+    return null;
+  }
+
+  String? _existingMediaPath(String tag) {
+    final relative = _resourcePathOf(tag);
+    if (relative == null || relative.isEmpty) return null;
+    final path = p.join(widget.platform.directory, relative);
+    return File(path).existsSync() ? path : null;
   }
 
   @override
   Widget build(BuildContext context) {
-    final coverPath = _cover.text.trim().isEmpty
-        ? null
-        : p.join(widget.platform.directory, _cover.text.trim());
-    final hasCover = coverPath != null && File(coverPath).existsSync();
-    final videoPath = _video.text.trim().isEmpty
-        ? null
-        : p.join(widget.platform.directory, _video.text.trim());
-
-    return Scaffold(
-      backgroundColor: AppTheme.background,
-      appBar: AppBar(
-        title: const Text('编辑游戏'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.delete_outline),
-            tooltip: '删除游戏',
-            onPressed: _delete,
+    final landscape =
+        MediaQuery.of(context).orientation == Orientation.landscape;
+    return WillPopScope(
+      onWillPop: () async {
+        Navigator.of(context).pop(_changed);
+        return false;
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          toolbarHeight: landscape ? 46 : kToolbarHeight,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () => Navigator.of(context).pop(_changed),
           ),
+          title: Text(
+            _game.name.isEmpty ? _game.file : _game.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          actions: [
+            IconButton(
+              tooltip: '启动游戏',
+              icon: const Icon(Icons.play_arrow_rounded),
+              onPressed: _launching ? null : _launchGame,
+            ),
+            IconButton(
+              tooltip: '编辑游戏',
+              icon: const Icon(Icons.edit_outlined),
+              onPressed: _openEditor,
+            ),
+            const SizedBox(width: 4),
+          ],
+        ),
+        body: _carouselBody(),
+      ),
+    );
+  }
+
+  Widget _tagChip(IconData icon, String label) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: AppTheme.subtleFill,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: AppTheme.textSecondary),
+          const SizedBox(width: 5),
+          Text(label,
+              style: const TextStyle(
+                  color: AppTheme.textSecondary, fontSize: 11.5)),
         ],
       ),
-      body: AppTheme.backdrop(
-        child: Stack(
+    );
+  }
+
+  Widget _placeholderBox() => Container(
+        color: AppTheme.subtleFill,
+        child: const Center(
+          child: Icon(Icons.image_outlined,
+              size: 24, color: AppTheme.textSecondary),
+        ),
+      );
+
+  // ---------------------------------------------------------------------------
+  // 轮播视图
+  // ---------------------------------------------------------------------------
+
+  Widget _carouselBody() {
+    final items = _carouselItems();
+    final size = MediaQuery.of(context).size;
+    final landscape = MediaQuery.of(context).orientation == Orientation.landscape;
+    // 横屏为主：左右分栏，信息栏宽度随屏幕伸缩，封面高度按可用高度取比例。
+    final wide = landscape && size.width >= 600;
+    final infoWidth = (size.width * 0.3).clamp(240.0, 400.0);
+    final coverHeight =
+        wide ? ((size.height - 110) * 0.42).clamp(90.0, 200.0) : 120.0;
+    final info = _carouselInfoPanel(coverHeight: coverHeight);
+
+    if (wide) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(18, 8, 18, 16),
+        child: Column(
           children: [
-            ListView(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 110),
-              children: [
-                if (!widget.platform.hasToml)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: GlassCard(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                      radius: 12,
-                      child: Row(
-                        children: const [
-                          Icon(Icons.auto_awesome_outlined, size: 17, color: AppTheme.accent),
-                          SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              '该平台尚未建立 savedeck.toml，搜刮或保存后会自动生成',
-                              style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                GlassCard(
-                  padding: const EdgeInsets.all(14),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Row(
-                        children: [
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(10),
-                            child: hasCover
-                                ? Image.file(
-                                    File(coverPath),
-                                    width: 72,
-                                    height: 96,
-                                    fit: BoxFit.cover,
-                                    errorBuilder: (_, __, ___) => _placeholder(),
-                                  )
-                                : _placeholder(),
-                          ),
-                          const SizedBox(width: 16),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  _name.text.isEmpty ? '未命名游戏' : _name.text,
-                                  style: const TextStyle(
-                                      color: AppTheme.textPrimary,
-                                      fontSize: 17,
-                                      fontWeight: FontWeight.w600),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  '${widget.platform.platform}  ·  ${_file.text}',
-                                  style: const TextStyle(
-                                      color: AppTheme.textSecondary, fontSize: 12),
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                const SizedBox(height: 10),
-                                Wrap(
-                                  spacing: 8,
-                                  runSpacing: 6,
-                                  children: [
-                                    TextButton.icon(
-                                      onPressed: _busy ? null : _showManualSearch,
-                                      icon: const Icon(Icons.search, size: 16),
-                                      label: const Text('手动搜索'),
-                                    ),
-                                    TextButton.icon(
-                                      onPressed: _busy ? null : _deleteMedia,
-                                      icon: const Icon(
-                                          Icons.delete_sweep_outlined,
-                                          size: 16),
-                                      label: const Text('删除媒体'),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      Center(
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 560),
-                          child: _VideoPreview(path: videoPath),
-                        ),
-                      ),
-                      _buildScrapeProgress(),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 12),
-                GlassCard(
-                  child: Column(
-                    children: [
-                      _field(
-                        '游戏名称',
-                        _name,
-                        icon: Icons.title_outlined,
-                        trailing: _translateButton(
-                          tooltip: '翻译名称（含中文译英，否则译中）',
-                          onPressed: _busy
-                              ? null
-                              : () => _translateField(_name,
-                                  title: '翻译名称', maxLines: 2),
-                        ),
-                      ),
-                      _field('ROM 文件（相对路径）', _file, icon: Icons.folder_outlined),
-                      _field('排序', _sort, icon: Icons.sort_outlined),
-                      _field('开发商（developpeur）', _developer,
-                          icon: Icons.business_outlined),
-                      _field('发售日期（dates）', _releaseDate,
-                          icon: Icons.event_outlined),
-                      _field('封面路径', _cover, icon: Icons.image_outlined),
-                      _field('视频路径', _video, icon: Icons.movie_outlined),
-                      _field('轮播图（wheel）', _wheel,
-                          icon: Icons.view_carousel_outlined),
-                      _field('整体包装（box-texture）', _boxTexture,
-                          icon: Icons.inventory_2_outlined),
-                      _field('3D 封面（box-3D）', _box3D,
-                          icon: Icons.view_in_ar_outlined),
-                      _field('游戏卡带（support-2D）', _support2D,
-                          icon: Icons.sd_card_outlined),
-                      _field('同人图（fanart）', _fanart,
-                          icon: Icons.palette_outlined),
-                      _field('全家福（mixrbv）', _mixrbv,
-                          icon: Icons.photo_library_outlined),
-                      _field('启动指令', _launch, icon: Icons.terminal_outlined),
-                      _field('ID（UUID）', _id, icon: Icons.fingerprint_outlined),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 12),
-                GlassCard(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      SectionTitle(
-                        '游戏简介',
-                        trailing: _translateButton(
-                          tooltip: '翻译为中文',
-                          onPressed: _busy
-                              ? null
-                              : () => _translateField(_description,
-                                  forceChinese: true,
-                                  title: '翻译简介',
-                                  maxLines: 10),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      TextField(
-                        controller: _description,
-                        maxLines: 6,
-                        style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
-                        decoration: const InputDecoration(hintText: '搜刮或手动填写游戏简介…'),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
+            _progressBar(),
+            Expanded(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SizedBox(width: infoWidth, child: info),
+                  const SizedBox(width: 16),
+                  Expanded(child: _MediaCarousel(items: items)),
+                ],
+              ),
             ),
           ],
         ),
+      );
+    }
+
+    // 竖屏（次要场景）：信息在上，轮播在下，避免左右分栏过窄。
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+      child: Column(
+        children: [
+          _progressBar(),
+          SizedBox(height: 240, child: info),
+          const SizedBox(height: 10),
+          Expanded(child: _MediaCarousel(items: items)),
+        ],
       ),
-      bottomNavigationBar: SafeArea(
-        minimum: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-        child: FilledButton.icon(
-          onPressed: _busy ? null : _save,
-          icon: const Icon(Icons.save_outlined, size: 18),
-          label: const Text('保存到 savedeck.toml'),
+    );
+  }
+
+  Widget _carouselInfoPanel({required double coverHeight}) {
+    final description = (_game.description ?? '').trim();
+    final developer = _game.developer;
+    final releaseDate = _game.releaseDate;
+    final cover = _coverFile;
+
+    return GlassCard(
+      padding: const EdgeInsets.all(14),
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (_detailFields.contains(ResourceFields.cover)) ...[
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: SizedBox(
+                  height: coverHeight,
+                  width: double.infinity,
+                  child: cover != null
+                      ? Image.file(
+                          File(cover),
+                          fit: BoxFit.contain,
+                          errorBuilder: (_, __, ___) => _placeholderBox(),
+                        )
+                      : _placeholderBox(),
+                ),
+              ),
+              const SizedBox(height: 14),
+            ],
+            Text(
+              _game.name,
+              style: const TextStyle(
+                  color: AppTheme.textPrimary,
+                  fontSize: 19,
+                  fontWeight: FontWeight.w700,
+                  height: 1.3),
+            ),
+            const SizedBox(height: 10),
+            _launchButton(),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                if (_detailFields.contains(ResourceFields.developer) &&
+                    developer != null &&
+                    developer.isNotEmpty)
+                  _tagChip(Icons.business_outlined, developer),
+                if (_detailFields.contains(ResourceFields.releaseDate) &&
+                    releaseDate != null &&
+                    releaseDate.isNotEmpty)
+                  _tagChip(Icons.event_outlined, releaseDate),
+              ],
+            ),
+            if (_detailFields.contains(ResourceFields.description) &&
+                description.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              const Text('游戏简介',
+                  style: TextStyle(
+                      color: AppTheme.textPrimary,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600)),
+              const SizedBox(height: 6),
+              SelectableText(
+                description,
+                style: const TextStyle(
+                    color: AppTheme.textSecondary, fontSize: 12.5, height: 1.7),
+              ),
+            ],
+            const SizedBox(height: 12),
+            Text(
+              '${widget.platform.platform} · ${_game.file}',
+              style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  /// 当前游戏的后台搜刮进度：阶段文字 + 真实下载百分比。
-  Widget _buildScrapeProgress() {
-    final state = _remoteStatus ?? (_busy ? _status : null);
+  /// 轮播内容：已下载的媒体资源，顺序固定为
+  /// wheel → box-texture → support-2D → fanart → mixrbv → 视频。
+  ///
+  /// 这里不按「详情页设置」过滤：轮播用于浏览库中已有的全部媒体，
+  /// 而左侧信息栏仍按设置勾选展示。
+  List<_MediaItem> _carouselItems() {
+    const order = <String>[
+      'wheel',
+      'box-texture',
+      'support-2D',
+      'fanart',
+      'mixrbv',
+    ];
+    final items = <_MediaItem>[];
+    for (final tag in order) {
+      final path = _existingMediaPath(tag);
+      if (path == null) continue;
+      items.add(_MediaItem(label: ResourceFields.labelOf(tag), path: path));
+    }
+    final video = _videoPath;
+    if (video != null && File(video).existsSync()) {
+      items.add(_MediaItem(label: '游戏视频', path: video, isVideo: true));
+    }
+    return items;
+  }
+
+  // ---------------------------------------------------------------------------
+  // 后台搜刮进度
+  // ---------------------------------------------------------------------------
+
+  Widget _progressBar() {
+    final service = BackgroundScrapeService.instance;
+    if (!service.isRunning) return const SizedBox.shrink();
+    final key = '${widget.platform.directory}/${_game.file}';
+    final snapshot = service.status;
+    final state = snapshot.statuses[key];
     if (state == null) return const SizedBox.shrink();
+    final progress = snapshot.progresses[key] ?? 0;
     final failed = state.startsWith('失败');
     final done = state == '已完成';
+    if (done) return const SizedBox.shrink();
     return Padding(
-      padding: const EdgeInsets.only(top: 12),
+      padding: const EdgeInsets.only(bottom: 10),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
         decoration: BoxDecoration(
           color: AppTheme.subtleFill,
           borderRadius: BorderRadius.circular(12),
@@ -848,33 +531,26 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
           children: [
             Row(
               children: [
-                Icon(
-                  failed
-                      ? Icons.error_outline
-                      : (done ? Icons.check_circle_outline : Icons.download),
-                  size: 15,
-                  color: failed
-                      ? AppTheme.danger
-                      : (done ? AppTheme.success : AppTheme.accent),
-                ),
+                Icon(failed ? Icons.error_outline : Icons.download,
+                    size: 15,
+                    color: failed ? AppTheme.danger : AppTheme.accent),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    done ? '后台下载完成，资料已更新' : state,
-                    style: TextStyle(
-                      color: failed ? AppTheme.danger : AppTheme.textPrimary,
-                      fontSize: 12,
-                    ),
+                    state,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        color: failed ? AppTheme.danger : AppTheme.textPrimary,
+                        fontSize: 12),
                   ),
                 ),
               ],
             ),
-            if (!done && !failed) ...[
-              const SizedBox(height: 8),
+            if (!failed) ...[
+              const SizedBox(height: 7),
               LinearProgressIndicator(
-                value: _remoteProgress > 0 ? _remoteProgress : null,
+                value: progress > 0 ? progress : null,
                 minHeight: 3,
                 backgroundColor: AppTheme.border,
                 valueColor:
@@ -886,435 +562,228 @@ class _GameDetailScreenState extends State<GameDetailScreen> {
       ),
     );
   }
-
-  Widget _placeholder() => Container(
-        width: 72,
-        height: 96,
-        color: AppTheme.subtleFill,
-        child: const Icon(Icons.image_outlined, color: AppTheme.textSecondary),
-      );
-
-  Widget _field(
-    String label,
-    TextEditingController controller, {
-    IconData? icon,
-    Widget? trailing,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: TextField(
-        controller: controller,
-        style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
-        decoration: InputDecoration(
-          labelText: label,
-          labelStyle: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
-          prefixIcon: icon == null ? null : Icon(icon, size: 18, color: AppTheme.textSecondary),
-          suffixIcon: trailing,
-        ),
-      ),
-    );
-  }
-
-  Widget _translateButton({
-    required VoidCallback? onPressed,
-    String tooltip = '翻译',
-  }) {
-    return IconButton(
-      tooltip: tooltip,
-      iconSize: 18,
-      visualDensity: VisualDensity.compact,
-      color: AppTheme.textSecondary,
-      icon: const Icon(Icons.translate),
-      onPressed: onPressed,
-    );
-  }
-
-  /// 翻译指定输入框的内容，结果以弹窗展示，用户确认并（可修改后）应用才写回。
-  ///
-  /// [forceChinese] 为 true 时始终译为中文（用于简介）；否则按内容自动判断方向。
-  Future<void> _translateField(
-    TextEditingController controller, {
-    bool forceChinese = false,
-    String title = '翻译结果',
-    int maxLines = 3,
-  }) async {
-    final text = controller.text.trim();
-    if (text.isEmpty) {
-      _showMessage('没有可翻译的内容');
-      return;
-    }
-
-    final toChinese = forceChinese || !TranslationService.containsChinese(text);
-    setState(() {
-      _busy = true;
-      _status = toChinese ? '正在翻译为中文…' : '正在翻译为英文…';
-    });
-
-    try {
-      final translated = toChinese
-          ? await TranslationService.toChinese(text)
-          : await TranslationService.toEnglish(text);
-      if (!mounted) return;
-      setState(() {
-        _busy = false;
-        _status = null;
-      });
-
-      // 先预览再应用：取消则保留原文，应用则写入（可在弹窗内修改）。
-      final applied = await showTranslationResultDialog(
-        context,
-        original: text,
-        translated: translated,
-        title: title,
-        directionLabel: toChinese ? '译文：中文' : '译文：英文',
-        maxLines: maxLines,
-      );
-      if (!mounted || applied == null || applied.isEmpty) return;
-      controller.text = applied;
-      _showMessage('已应用翻译，可继续修改后保存');
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _busy = false;
-        _status = null;
-      });
-      _showMessage('翻译失败：$e');
-    }
-  }
-
-  void _showManualSearch() {
-    final controller = TextEditingController(text: _name.text);
-    String? error;
-    var translating = false;
-    var cover = true;
-    var video = true;
-    var description = true;
-    // 记录搜索框内容是否来自「翻译」，用于搜刮前询问是否应用译名。
-    String? translatedName;
-
-    showDialog<_ManualSearchResult>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          backgroundColor: AppTheme.surface,
-          title: const Text('按名称搜索',
-              style: TextStyle(color: AppTheme.textPrimary, fontSize: 17)),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              TextField(
-                controller: controller,
-                autofocus: true,
-                style: const TextStyle(color: AppTheme.textPrimary),
-                decoration: const InputDecoration(hintText: '输入游戏名称'),
-              ),
-              const SizedBox(height: 6),
-              Row(
-                children: [
-                  TextButton.icon(
-                    onPressed: translating
-                        ? null
-                        : () async {
-                            final text = controller.text.trim();
-                            if (text.isEmpty) return;
-                            final route = ModalRoute.of(context);
-                            setDialogState(() {
-                              translating = true;
-                              error = null;
-                            });
-                            try {
-                              final translated =
-                                  await TranslationService.autoTranslate(text);
-                              if (route != null && !route.isCurrent) return;
-                              // 弹窗确认（可修改）后再写回输入框。
-                              // ignore: use_build_context_synchronously
-                              final applied = await showTranslationResultDialog(
-                                context,
-                                original: text,
-                                translated: translated,
-                                title: '翻译搜索结果',
-                                directionLabel: TranslationService.containsChinese(text)
-                                    ? '译文：英文'
-                                    : '译文：中文',
-                                maxLines: 2,
-                              );
-                              if (applied != null && applied.isNotEmpty) {
-                                controller.text = applied;
-                                translatedName = applied;
-                              }
-                            } catch (e) {
-                              error = e.toString();
-                            } finally {
-                              if (route == null || route.isCurrent) {
-                                setDialogState(() => translating = false);
-                              }
-                            }
-                          },
-                    icon: translating
-                        ? const SizedBox(
-                            width: 14,
-                            height: 14,
-                            child: CircularProgressIndicator(
-                                strokeWidth: 2, color: AppTheme.accent),
-                          )
-                        : const Icon(Icons.translate, size: 16),
-                    label: const Text('翻译'),
-                  ),
-                  const Expanded(
-                    child: Text('含中文译英，否则译中',
-                        style: TextStyle(
-                            color: AppTheme.textSecondary, fontSize: 11)),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              const Text('选择要搜刮的内容',
-                  style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
-              CheckboxListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                activeColor: AppTheme.accent,
-                title: const Text('封面图片',
-                    style: TextStyle(color: AppTheme.textPrimary, fontSize: 13)),
-                value: cover,
-                onChanged: (v) => setDialogState(() => cover = v ?? true),
-              ),
-              CheckboxListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                activeColor: AppTheme.accent,
-                title: const Text('游戏视频',
-                    style: TextStyle(color: AppTheme.textPrimary, fontSize: 13)),
-                value: video,
-                onChanged: (v) => setDialogState(() => video = v ?? true),
-              ),
-              CheckboxListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                activeColor: AppTheme.accent,
-                title: const Text('游戏简介',
-                    style: TextStyle(color: AppTheme.textPrimary, fontSize: 13)),
-                value: description,
-                onChanged: (v) => setDialogState(() => description = v ?? true),
-              ),
-              if (error != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text(error!,
-                      style: const TextStyle(
-                          color: AppTheme.danger, fontSize: 12)),
-                ),
-            ],
-          ),
-        ),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(dialogContext),
-                child: const Text('取消')),
-            TextButton(
-              onPressed: () {
-                final query = controller.text.trim();
-                if (query.isEmpty) return;
-                if (!cover && !video && !description) {
-                  setDialogState(() => error = '请至少选择一项要搜刮的内容');
-                  return;
-                }
-                // 只有翻译出英文名时才在选定结果后询问是否应用为游戏名。
-                final translated = translatedName != null &&
-                        !TranslationService.containsChinese(query)
-                    ? query
-                    : null;
-                Navigator.pop(
-                  dialogContext,
-                  _ManualSearchResult(
-                    query,
-                    ScrapeOptions(
-                      downloadCover: cover,
-                      downloadVideo: video,
-                      overwriteDescription: description,
-                    ),
-                    translated,
-                  ),
-                );
-              },
-              child: const Text('搜索'),
-            ),
-          ],
-        ),
-      ),
-    ).then((value) {
-      if (value != null && value.query.isNotEmpty) {
-        _scrape(
-          manualQuery: value.query,
-          options: value.options,
-          translatedName: value.translatedName,
-        );
-      }
-    });
-  }
 }
 
-/// 详情页内嵌视频小窗：自动播本地视频，无视频时显示占位。
-class _VideoPreview extends StatefulWidget {
-  final String? path;
+/// 轮播中的一项媒体资源。
+class _MediaItem {
+  final String label;
+  final String path;
+  final bool isVideo;
 
-  const _VideoPreview({required this.path});
-
-  @override
-  State<_VideoPreview> createState() => _VideoPreviewState();
+  const _MediaItem({
+    required this.label,
+    required this.path,
+    this.isVideo = false,
+  });
 }
 
-class _VideoPreviewState extends State<_VideoPreview> {
-  VideoPlayerController? _controller;
-  Timer? _autoPlayTimer;
-  bool _failed = false;
+/// 媒体轮播：一次展示一项，带左右箭头与页码指示。
+class _MediaCarousel extends StatefulWidget {
+  final List<_MediaItem> items;
+
+  const _MediaCarousel({required this.items});
 
   @override
-  void initState() {
-    super.initState();
-    _initialize();
-  }
+  State<_MediaCarousel> createState() => _MediaCarouselState();
+}
 
-  @override
-  void didUpdateWidget(covariant _VideoPreview oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.path != widget.path) {
-      _autoPlayTimer?.cancel();
-      _autoPlayTimer = null;
-      _controller?.dispose();
-      _controller = null;
-      _failed = false;
-      _initialize();
-    }
-  }
-
-  Future<void> _initialize() async {
-    final path = widget.path;
-    if (path == null || path.isEmpty) return;
-    final file = File(path);
-    if (!file.existsSync()) return;
-    final controller = VideoPlayerController.file(file);
-    _controller = controller;
-    try {
-      await controller.initialize();
-    } catch (_) {
-      controller.dispose();
-      if (!mounted) return;
-      setState(() {
-        _failed = true;
-        _controller = null;
-      });
-      return;
-    }
-    if (!mounted) {
-      controller.dispose();
-      return;
-    }
-    setState(() {});
-
-    final delay = await PreferencesService.videoAutoPlayDelay;
-    if (delay <= 0 || !mounted) return;
-    _autoPlayTimer = Timer(Duration(seconds: delay), () {
-      if (mounted &&
-          controller.value.isInitialized &&
-          !controller.value.isPlaying) {
-        controller.play();
-      }
-    });
-  }
+class _MediaCarouselState extends State<_MediaCarousel> {
+  final PageController _controller = PageController();
+  int _index = 0;
 
   @override
   void dispose() {
-    _autoPlayTimer?.cancel();
-    _controller?.dispose();
+    _controller.dispose();
     super.dispose();
   }
 
-  Widget _placeholder(String text) => Container(
-        width: double.infinity,
-        height: 120,
-        decoration: BoxDecoration(
-          color: AppTheme.subtleFill,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Icon(Icons.movie_outlined,
-                size: 26, color: AppTheme.textSecondary),
-            const SizedBox(height: 6),
-            Text(text,
-                style: const TextStyle(
-                    color: AppTheme.textSecondary, fontSize: 12)),
-          ],
-        ),
-      );
+  @override
+  void didUpdateWidget(covariant _MediaCarousel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.items.length != widget.items.length &&
+        _index >= widget.items.length) {
+      _index = widget.items.isEmpty ? 0 : widget.items.length - 1;
+    }
+  }
+
+  void _jump(int delta) {
+    if (widget.items.length <= 1) return;
+    final next = (_index + delta) % widget.items.length;
+    final target = next < 0 ? next + widget.items.length : next;
+    _controller.animateToPage(
+      target,
+      duration: const Duration(milliseconds: 260),
+      curve: Curves.easeOutCubic,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    final controller = _controller;
-    if (controller == null) {
-      return _placeholder(
-          _failed ? '视频无法播放' : '暂无视频（搜刮后自动显示）');
-    }
-    return ValueListenableBuilder<VideoPlayerValue>(
-      valueListenable: controller,
-      builder: (context, value, _) {
-        if (!value.isInitialized) return _placeholder('视频加载中…');
-        return ClipRRect(
-          borderRadius: BorderRadius.circular(12),
-          child: Stack(
-            alignment: Alignment.center,
-            children: <Widget>[
-              AspectRatio(
-                aspectRatio: value.aspectRatio == 0 ? 16 / 9 : value.aspectRatio,
-                child: VideoPlayer(controller),
-              ),
-              Positioned(
-                left: 8,
-                bottom: 12,
-                child: GestureDetector(
-                  onTap: () {
-                    if (value.isPlaying) {
-                      controller.pause();
-                    } else {
-                      controller.play();
-                    }
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.all(6),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.45),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(
-                      value.isPlaying ? Icons.pause : Icons.play_arrow,
-                      color: Colors.white,
-                      size: 18,
-                    ),
-                  ),
-                ),
-              ),
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 0,
-                child: VideoProgressIndicator(
-                  controller,
-                  allowScrubbing: true,
-                  colors: const VideoProgressColors(
-                    playedColor: AppTheme.accent,
-                    bufferedColor: AppTheme.border,
-                    backgroundColor: Color(0x33FFFFFF),
-                  ),
-                ),
+    if (widget.items.isEmpty) {
+      return GlassCard(
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.photo_library_outlined,
+                  size: 42, color: AppTheme.textSecondary),
+              const SizedBox(height: 12),
+              const Text('暂无媒体资源',
+                  style:
+                      TextStyle(color: AppTheme.textPrimary, fontSize: 14)),
+              const SizedBox(height: 6),
+              Text(
+                '点击右上角编辑按钮可搜刮轮播图、包装、卡带等资源。',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    color: AppTheme.textSecondary.withOpacity(0.9),
+                    fontSize: 12),
               ),
             ],
           ),
-        );
-      },
+        ),
+      );
+    }
+
+    return Column(
+      children: [
+        Expanded(
+          child: Stack(
+            children: [
+              PageView.builder(
+                controller: _controller,
+                itemCount: widget.items.length,
+                onPageChanged: (i) => setState(() => _index = i),
+                itemBuilder: (context, i) => Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: _MediaPage(
+                    item: widget.items[i],
+                    index: i,
+                    total: widget.items.length,
+                  ),
+                ),
+              ),
+              if (widget.items.length > 1) ...[
+                Positioned(
+                  left: 8,
+                  top: 0,
+                  bottom: 0,
+                  child: Center(child: _arrow(Icons.chevron_left, -1)),
+                ),
+                Positioned(
+                  right: 8,
+                  top: 0,
+                  bottom: 0,
+                  child: Center(child: _arrow(Icons.chevron_right, 1)),
+                ),
+              ],
+            ],
+          ),
+        ),
+        if (widget.items.length > 1) ...[
+          const SizedBox(height: 10),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              for (var i = 0; i < widget.items.length; i++)
+                GestureDetector(
+                  onTap: () => _controller.animateToPage(
+                    i,
+                    duration: const Duration(milliseconds: 240),
+                    curve: Curves.easeOut,
+                  ),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    margin: const EdgeInsets.symmetric(horizontal: 3),
+                    width: i == _index ? 18 : 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      color: i == _index ? AppTheme.accent : AppTheme.border,
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _arrow(IconData icon, int delta) {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppTheme.surface.withOpacity(0.86),
+        shape: BoxShape.circle,
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: IconButton(
+        iconSize: 20,
+        color: AppTheme.textPrimary,
+        icon: Icon(icon),
+        onPressed: () => _jump(delta),
+      ),
+    );
+  }
+}
+
+class _MediaPage extends StatelessWidget {
+  final _MediaItem item;
+  final int index;
+  final int total;
+
+  const _MediaPage({
+    required this.item,
+    required this.index,
+    required this.total,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassCard(
+      padding: const EdgeInsets.all(10),
+      child: Column(
+        children: [
+          Expanded(
+            child: Container(
+              width: double.infinity,
+              decoration: BoxDecoration(
+                color: AppTheme.subtleFill,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: item.isVideo
+                  ? Center(
+                      child: VideoPreview(
+                        path: item.path,
+                        placeholderHeight: 160,
+                      ),
+                    )
+                  : Image.file(
+                      File(item.path),
+                      fit: BoxFit.contain,
+                      errorBuilder: (_, __, ___) => const Center(
+                        child: Icon(Icons.broken_image_outlined,
+                            size: 32, color: AppTheme.textSecondary),
+                      ),
+                    ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(item.label,
+                  style: const TextStyle(
+                      color: AppTheme.textPrimary, fontSize: 12)),
+              const SizedBox(width: 8),
+              Text('${index + 1} / $total',
+                  style: const TextStyle(
+                      color: AppTheme.textSecondary, fontSize: 11)),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }

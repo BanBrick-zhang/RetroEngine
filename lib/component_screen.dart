@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'widgets/app_toast.dart';
+
 class ComponentScreen extends StatelessWidget {
   const ComponentScreen({super.key, required this.showNavBottomBar});
 
@@ -52,19 +54,7 @@ void Function()? handlePressed(
   return isDisabled
       ? null
       : () {
-          final snackBar = SnackBar(
-            content: Text(
-              'Yay! $buttonName is clicked!',
-              style: TextStyle(color: Theme.of(context).colorScheme.surface),
-            ),
-            action: SnackBarAction(
-              textColor: Theme.of(context).colorScheme.surface,
-              label: 'Close',
-              onPressed: () {},
-            ),
-          );
-
-          ScaffoldMessenger.of(context).showSnackBar(snackBar);
+          AppToast.show(context, 'Yay! $buttonName is clicked!');
         };
 }
 

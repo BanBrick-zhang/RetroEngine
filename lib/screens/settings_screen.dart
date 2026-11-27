@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
 
+import '../models/resource_fields.dart';
 import '../services/library_service.dart';
 import '../services/preferences_service.dart';
 import '../services/screenscraper_service.dart';
 import '../services/version_service.dart';
 import '../theme.dart';
+import '../widgets/app_toast.dart';
 import '../widgets/permission_dialog.dart';
 import 'file_browser_screen.dart';
+import 'library_edit_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   final ValueChanged<String> onLibraryChanged;
@@ -24,9 +27,8 @@ class _SettingsScreenState extends State<SettingsScreen>
   final _translateKeyController = TextEditingController();
   String? _libraryPath;
   String? _language;
-  bool _cover = true;
-  bool _video = true;
-  bool _overwrite = true;
+  Set<String> _scrapeFields = <String>{...ResourceFields.defaults};
+  Set<String> _detailFields = <String>{...ResourceFields.defaults};
   bool _autoId = true;
   bool _renameRom = true;
   bool _renameMedia = true;
@@ -77,9 +79,8 @@ class _SettingsScreenState extends State<SettingsScreen>
     final user = await PreferencesService.ssUsername;
     final password = await PreferencesService.ssPassword;
     final language = await PreferencesService.language;
-    final cover = await PreferencesService.downloadCover;
-    final video = await PreferencesService.downloadVideo;
-    final overwrite = await PreferencesService.overwriteDescription;
+    final scrapeFields = await PreferencesService.scrapeFields;
+    final detailFields = await PreferencesService.detailFields;
     final autoId = await PreferencesService.autoId;
     final renameRom = await PreferencesService.renameRomOnSave;
     final renameMedia = await PreferencesService.renameMediaOnSave;
@@ -93,9 +94,8 @@ class _SettingsScreenState extends State<SettingsScreen>
       _passwordController.text = password ?? '';
       _translateKeyController.text = translateKey ?? '';
       _language = language;
-      _cover = cover;
-      _video = video;
-      _overwrite = overwrite;
+      _scrapeFields = scrapeFields;
+      _detailFields = detailFields;
       _autoId = autoId;
       _renameRom = renameRom;
       _renameMedia = renameMedia;
@@ -121,6 +121,8 @@ class _SettingsScreenState extends State<SettingsScreen>
             _translateCard(),
             const SizedBox(height: 14),
             _optionsCard(),
+            const SizedBox(height: 14),
+            _detailCard(),
             const SizedBox(height: 14),
             _aboutCard(),
           ],
@@ -170,8 +172,60 @@ class _SettingsScreenState extends State<SettingsScreen>
             ),
           ],
         ),
+        const SizedBox(height: 12),
+        Material(
+          color: AppTheme.subtleFill,
+          borderRadius: BorderRadius.circular(10),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(10),
+            onTap: _libraryPath == null ? null : _openLibraryEdit,
+            child: Padding(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+              child: Row(
+                children: [
+                  const Icon(Icons.tune, size: 18, color: AppTheme.accent),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          '游戏库管理',
+                          style: TextStyle(
+                            color: _libraryPath == null
+                                ? AppTheme.textSecondary
+                                : AppTheme.textPrimary,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        const Text(
+                          '重命名、排序、添加平台、导入 ROM',
+                          style: TextStyle(
+                              color: AppTheme.textSecondary, fontSize: 11),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Icon(Icons.chevron_right,
+                      size: 18, color: AppTheme.textSecondary),
+                ],
+              ),
+            ),
+          ),
+        ),
       ],
     );
+  }
+
+  Future<void> _openLibraryEdit() async {
+    await Navigator.of(context).push<void>(
+      AppPageRoute(builder: (_) => const LibraryEditScreen()),
+    );
+    if (mounted) await _load();
   }
 
   Widget _accountCard() {
@@ -336,13 +390,11 @@ class _SettingsScreenState extends State<SettingsScreen>
             ),
           ],
         ),
-        _switchTile('下载 box2D 正面封面到 media/游戏名/cover.png', _cover,
-            (v) => setState(() => _cover = v), (v) => PreferencesService.setDownloadCover(v)),
-        _switchTile('下载游戏视频到 media/游戏名/video.mp4', _video,
-            (v) => setState(() => _video = v), (v) => PreferencesService.setDownloadVideo(v)),
-        _switchTile('用搜刮简介覆盖已有简介', _overwrite,
-            (v) => setState(() => _overwrite = v),
-            (v) => PreferencesService.setOverwriteDescription(v)),
+        const SizedBox(height: 12),
+        _sectionLabel('搜刮内容（未勾选的字段不会被下载/写入）'),
+        ..._scrapeTiles(),
+        const SizedBox(height: 12),
+        _sectionLabel('保存'),
         _switchTile('新游戏自动生成 UUID', _autoId,
             (v) => setState(() => _autoId = v), (v) => PreferencesService.setAutoId(v)),
         _switchTile('保存时按游戏名重命名 ROM 文件（保留扩展名）', _renameRom,
@@ -352,6 +404,89 @@ class _SettingsScreenState extends State<SettingsScreen>
             (v) => setState(() => _renameMedia = v),
             (v) => PreferencesService.setRenameMediaOnSave(v)),
       ],
+    );
+  }
+
+  Widget _detailCard() {
+    return GlassExpansionCard(
+      title: '游戏详情页设置',
+      icon: Icons.dashboard_customize_outlined,
+      children: [
+        const Text(
+          '勾选需要在游戏详情页轮播视图左侧信息栏中展示的内容；'
+          '轮播视图右侧会展示全部已下载的媒体资源，未勾选的内容仍可随时在右上角「编辑」弹窗中修改。'
+          '媒体文件保存为 media/游戏名/<类型>-<游戏UUID>.<扩展名>，例如 '
+          'cover-fae1c5a6-dbac-419a-868d-53de1945c484.webp。',
+          style: TextStyle(color: AppTheme.textSecondary, fontSize: 11, height: 1.5),
+        ),
+        const SizedBox(height: 8),
+        ..._detailTiles(),
+      ],
+    );
+  }
+
+  Widget _sectionLabel(String text) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 4, bottom: 2),
+      child: Text(
+        text,
+        style: const TextStyle(
+          color: AppTheme.textPrimary,
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+
+  List<Widget> _scrapeTiles() => ResourceFields.all
+      .map((field) => _checkTile(
+            field,
+            checked: _scrapeFields.contains(field),
+            onChanged: (value) {
+              final next = <String>{..._scrapeFields};
+              if (value) {
+                next.add(field);
+              } else {
+                next.remove(field);
+              }
+              setState(() => _scrapeFields = next);
+              PreferencesService.setScrapeFields(next);
+            },
+          ))
+      .toList();
+
+  List<Widget> _detailTiles() => ResourceFields.all
+      .map((field) => _checkTile(
+            field,
+            checked: _detailFields.contains(field),
+            onChanged: (value) {
+              final next = <String>{..._detailFields};
+              if (value) {
+                next.add(field);
+              } else {
+                next.remove(field);
+              }
+              setState(() => _detailFields = next);
+              PreferencesService.setDetailFields(next);
+            },
+          ))
+      .toList();
+
+  Widget _checkTile(String field,
+      {required bool checked, required ValueChanged<bool> onChanged}) {
+    return CheckboxListTile(
+      value: checked,
+      dense: true,
+      visualDensity: VisualDensity.compact,
+      contentPadding: EdgeInsets.zero,
+      controlAffinity: ListTileControlAffinity.leading,
+      activeColor: AppTheme.accent,
+      title: Text(
+        ResourceFields.labelOf(field),
+        style: const TextStyle(color: AppTheme.textPrimary, fontSize: 13),
+      ),
+      onChanged: (value) => onChanged(value ?? false),
     );
   }
 
@@ -451,9 +586,8 @@ class _SettingsScreenState extends State<SettingsScreen>
     await PreferencesService.setSsUsername(_userController.text.trim());
     await PreferencesService.setSsPassword(_passwordController.text.trim());
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('账号已保存')),
-      );
+      AppToast.show(context, '账号已保存', icon: Icons.check_circle_outline,
+          color: AppTheme.success);
     }
   }
 
@@ -532,6 +666,7 @@ class _SettingsScreenState extends State<SettingsScreen>
   }
 
   void _showMessage(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    if (!mounted) return;
+    AppToast.show(context, message);
   }
 }

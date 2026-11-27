@@ -124,8 +124,8 @@ class AppTheme {
   /// 带缓慢浮动光斑的浅灰渐变背景，作为毛玻璃的衬底。
   static Widget backdrop({required Widget child}) => GlassBackdrop(child: child);
 
-  /// 页面内容需要避开底部导航栏时的额外间距。
-  static const double bottomNavClearance = 92;
+  /// 内容区底部额外留白（底部按键提示条由 Scaffold 自动避开）。
+  static const double bottomNavClearance = 14;
 
   static Widget _blob(double size, Color color) => Container(
         width: size,
@@ -237,37 +237,80 @@ class GlassCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final content = Container(
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.72),
+        borderRadius: BorderRadius.circular(radius),
+        border: Border.all(
+          color: borderColor ?? Colors.white.withOpacity(0.92),
+          width: 1,
+        ),
+        boxShadow: <BoxShadow>[
+          BoxShadow(
+            color: Colors.black.withOpacity(0.055),
+            blurRadius: 16,
+            offset: const Offset(0, 5),
+          ),
+        ],
+      ),
+      padding: padding,
+      child: child,
+    );
+    // blur 为 0 时跳过 BackdropFilter：滚动容器内使用模糊层容易出现闪烁。
     final card = ClipRRect(
       borderRadius: BorderRadius.circular(radius),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
-        child: Container(
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.72),
-            borderRadius: BorderRadius.circular(radius),
-            border: Border.all(
-              color: borderColor ?? Colors.white.withOpacity(0.92),
-              width: 1,
-            ),
-            boxShadow: <BoxShadow>[
-              BoxShadow(
-                color: Colors.black.withOpacity(0.045),
-                blurRadius: 12,
-                offset: const Offset(0, 3),
-              ),
-            ],
-          ),
-          padding: padding,
-          child: child,
+      child: blur > 0
+          ? BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+              child: content,
+            )
+          : content,
+    );
+    if (onTap == null) return card;
+    return _PressScale(
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(radius),
+          child: card,
         ),
       ),
     );
-    if (onTap == null) return card;
-    return Material(color: Colors.transparent, child: InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(radius),
-      child: card,
-    ));
+  }
+}
+
+/// 按下时轻微缩小，让可点击卡片有明确的触感反馈。
+class _PressScale extends StatefulWidget {
+  final Widget child;
+
+  const _PressScale({required this.child});
+
+  @override
+  State<_PressScale> createState() => _PressScaleState();
+}
+
+class _PressScaleState extends State<_PressScale> {
+  bool _pressed = false;
+
+  void _setPressed(bool value) {
+    if (_pressed == value) return;
+    setState(() => _pressed = value);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      onPointerDown: (_) => _setPressed(true),
+      onPointerUp: (_) => _setPressed(false),
+      onPointerCancel: (_) => _setPressed(false),
+      child: AnimatedScale(
+        scale: _pressed ? 0.985 : 1,
+        duration: const Duration(milliseconds: 120),
+        curve: Curves.easeOut,
+        child: widget.child,
+      ),
+    );
   }
 }
 
@@ -384,6 +427,20 @@ class GlassChip extends StatelessWidget {
           border: Border.all(
             color: selected ? AppTheme.accent : AppTheme.border,
           ),
+          boxShadow: <BoxShadow>[
+            if (selected)
+              BoxShadow(
+                color: AppTheme.accent.withOpacity(0.3),
+                blurRadius: 10,
+                offset: const Offset(0, 3),
+              )
+            else
+              BoxShadow(
+                color: Colors.black.withOpacity(0.05),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+          ],
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,

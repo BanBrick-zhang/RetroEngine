@@ -6,6 +6,7 @@ import 'package:flutter/services.dart' show LogicalKeyboardKey;
 import 'data/screenscraper_systems.dart';
 import 'screens/library_screen.dart';
 import 'services/background_scrape_service.dart';
+import 'services/cloud_save_service.dart';
 import 'services/library_service.dart';
 import 'services/preferences_service.dart';
 import 'theme.dart';
@@ -131,6 +132,9 @@ class _SaveDeckToolkitAppState extends State<SaveDeckToolkitApp>
     await LibraryService.ensureStoragePermission();
     await _recheckPermission();
     if (mounted) setState(() => _checkingPermission = false);
+
+    // 启动后按设置自动进行云存档同步，后台执行不阻塞首屏。
+    unawaited(CloudSaveService.instance.autoSyncOnStart());
   }
 
   void _onLibraryChanged(String path) {

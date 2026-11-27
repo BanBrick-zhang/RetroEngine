@@ -223,9 +223,7 @@ class BackgroundScrapeService extends ChangeNotifier {
             game: job.game,
             candidate: job.candidate!,
             systemId: job.systemId,
-            downloadCover: job.options.downloadCover,
-            downloadVideo: job.options.downloadVideo,
-            overwriteDescription: job.options.overwriteDescription,
+            options: job.options,
             renameGame: job.renameGame,
             nameOverride: job.nameOverride,
             onProgress: onProgress,
@@ -235,9 +233,7 @@ class BackgroundScrapeService extends ChangeNotifier {
           result = await service.scrapeAuto(
             platform: job.platform,
             game: job.game,
-            downloadCover: job.options.downloadCover,
-            downloadVideo: job.options.downloadVideo,
-            overwriteDescription: job.options.overwriteDescription,
+            options: job.options,
             onProgress: onProgress,
             onDownloadProgress: onDownloadProgress,
           );
